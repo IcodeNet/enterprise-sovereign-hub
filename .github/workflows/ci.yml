@@ -1,0 +1,91 @@
+name: Portfolio Test Harness
+
+on:
+  # Temporarily manual-only to avoid running expensive checks on every commit.
+  # Re-enable push/pull_request triggers when budget constraints are lifted.
+  workflow_dispatch: {}
+
+jobs:
+  verify-content-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify lesson and book artifact integrity
+        env:
+          BLOCKED_TERMS: ${{ secrets.BLOCKED_TERMS }}
+        run: python3 scripts/check_lesson_artifacts.py
+
+  verify-python:
+    runs-on: ubuntu-latest
+    env:
+      # Keep the secret in env and gate on env.* below.
+      # GitHub Actions can fail workflow planning when secrets.* is used directly in if:.
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    defaults:
+      run:
+        working-directory: apps/ai-engine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: apps/ai-engine/requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Every Day's Python module is a runnable script under src/, verified
+      # by actually executing it against a real model call - the same
+      # discipline this repo's docs describe, not just "no syntax errors."
+      # This needs OPENAI_API_KEY as a repo secret; without it these steps
+      # are skipped rather than failing the whole pipeline, since a fork or
+      # a first-time clone won't have the secret configured yet.
+      # Important: gate on env.OPENAI_API_KEY, not secrets.OPENAI_API_KEY,
+      # to avoid workflow-file planning failures.
+      - name: Run Day scripts as smoke tests (requires OPENAI_API_KEY secret)
+        if: ${{ env.OPENAI_API_KEY != '' }}
+        env:
+          PYDANTIC_AI_NO_BANNER: "1"
+        run: |
+          python src/agents/market_analyst.py
+          python src/agents/swarm_consensus.py
+
+      - name: Run pytest suite (requires OPENAI_API_KEY secret)
+        if: ${{ env.OPENAI_API_KEY != '' }}
+        run: pytest tests/
+
+  verify-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install Node dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx oxlint .
+
+      - name: Format check
+        run: npx oxfmt --check .
+
+      - name: Build
+        run: npm run build

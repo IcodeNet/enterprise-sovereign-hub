@@ -1,0 +1,1016 @@
+<section class="part" id="part-8">
+  <div class="part-header">
+    <div class="part-eyebrow">Part VIII</div>
+    <h2>Cost, Context &amp; Self-Correction</h2>
+    <p class="part-intro">A capable agent is not automatically an economical or dependable one. It must spend model capacity where it matters, keep long conversations within limits, learn when extra examples help, and recover when its own decisions go wrong. This part turns those concerns into explicit routes, budgets, checks, memories, and rollback points that can be measured in both Python and TypeScript.</p>
+    <div class="reader-note">
+      <p><b>Dual-domain map for this part:</b> the same cost-and-adaptation controls apply to Eunomia and Skill Reporter.</p>
+      <ul>
+        <li><b>Eunomia domain:</b> model-routing budgets, local-quantized fallbacks, context reuse and compaction, adaptive examples, image/tool workflows, graph-safe correction, hierarchical memory, and rollback controls.</li>
+        <li><b>Skill Reporter domain:</b> the same model-routing, quantization, context, examples, multimodal/tool, graph-correction, memory, and rollback controls for report-generation workloads.</li>
+      </ul>
+      <p><b>Interlink chain:</b> Lessons <a href="#lesson-11">11</a> and <a href="#lesson-16">16</a> control model cost, Lessons <a href="#lesson-22">22</a> and <a href="#lesson-33">33</a> control context growth, Lesson <a href="#lesson-38">38</a> adapts examples, Lessons <a href="#lesson-41">41</a> and <a href="#lesson-47">47</a> constrain multimodal and graph updates, and Lessons <a href="#lesson-42">42</a> and <a href="#lesson-43">43</a> preserve memory and recover safely.</p>
+    </div>
+  </div>
+
+  <!-- LESSON 11 -->
+  <article class="lesson" id="lesson-11">
+    <span class="lesson-tag">Lesson 11</span>
+    <h3>Multi-Model Router &amp; Semantic Cache</h3>
+    <div class="problem"><b>The problem:</b> if Eunomia sends every savings question to the most expensive model, routine requests become too costly and too slow. Exact-text caching misses many equivalent customer questions with different wording. Skill Reporter has the same inefficiency when semantically similar report requests are not reused safely.</div>
+
+    <p>A <span class="jargon">model router</span> (a decision-maker that sends each request to the cheapest and fastest model capable of answering it safely) makes model choice part of the application rather than a permanent setting. Start with a baseline that sends every request to one expensive model and records cost, response time, and answer quality. Then classify each incoming question by complexity, required tools, and risk. Routine low-risk work may fit a small local model, ordinary cloud work may fit a lower-cost model, and complex or sensitive requests can still reach the highest-capability model.</p>
+
+    <p>The second saving comes from a <span class="jargon">semantic cache</span> (a store that can reuse an earlier answer when a new question has the same meaning even if the wording differs). Each question is turned into an <span class="jargon">embedding</span> (a list of numbers representing the meaning of a piece of text), then compared with stored questions. A <span class="jargon">similarity threshold</span> (the minimum meaning-match score required before a cached answer may be reused) prevents a merely related question from being treated as identical. An uncertain match means no cached answer is reusable: the router should make a fresh model call rather than force reuse.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class CacheEntry:
+    customer_id: str
+    account_version: str
+    permission_scope: str
+    source_version: str
+    expires_at: float
+    vector: list[float]
+    answer: str
+
+async def semantic_lookup(question: str, customer_id: str, account_version: str,
+                          permission_scope: str, source_version: str, now: float,
+                          embed: Callable[[str], Awaitable[list[float]]]) -&gt; str | None:
+    query = await embed(question)
+    scoped = (
+        entry for entry in CACHE
+        if entry.customer_id == customer_id
+        and entry.account_version == account_version
+        and entry.permission_scope == permission_scope
+        and entry.source_version == source_version
+        and entry.expires_at &gt; now
+    )
+    best = max(scoped, key=lambda entry: cosine(query, entry.vector), default=None)
+    return best.answer if best and cosine(query, best.vector) &gt;= 0.92 else None</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface CacheEntry {
+  customerId: string;
+  accountVersion: string;
+  permissionScope: string;
+  sourceVersion: string;
+  expiresAt: number;
+  vector: number[];
+  answer: string;
+}
+
+async function semanticLookup(
+  question: string,
+  scope: Omit&lt;CacheEntry, "vector" | "answer" | "expiresAt"&gt; &amp; { now: number },
+  embed: (text: string) =&gt; Promise&lt;number[]&gt;,
+): Promise&lt;string | undefined&gt; {
+  const query = await embed(question);
+  const scoped = cache.filter(
+    (entry) =&gt;
+      entry.customerId === scope.customerId &amp;&amp;
+      entry.accountVersion === scope.accountVersion &amp;&amp;
+      entry.permissionScope === scope.permissionScope &amp;&amp;
+      entry.sourceVersion === scope.sourceVersion &amp;&amp;
+      entry.expiresAt &gt; scope.now,
+  );
+  const ranked = scoped.map((entry) =&gt; ({ entry, score: cosine(query, entry.vector) }));
+  const best = ranked.sort((a, b) =&gt; b.score - a.score)[0];
+  return best?.score &gt;= 0.92 ? best.entry.answer : undefined;
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 540">
+        <defs>
+          <marker id="ah11" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="55" width="145" height="58" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="97" y="80" fill="white" font-size="12" font-weight="600" text-anchor="middle">Customer question</text>
+        <line x1="170" y1="84" x2="210" y2="84" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <rect x="212" y="55" width="155" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="289" y="78" fill="white" font-size="11" font-weight="600" text-anchor="middle">Safety and scope</text>
+        <text x="289" y="94" fill="#94a3b8" font-size="10" text-anchor="middle">check</text>
+        <line x1="367" y1="84" x2="407" y2="84" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <rect x="409" y="55" width="155" height="58" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="486" y="78" fill="white" font-size="11" font-weight="600" text-anchor="middle">Create meaning</text>
+        <text x="486" y="94" fill="#94a3b8" font-size="10" text-anchor="middle">embedding</text>
+        <line x1="564" y1="84" x2="618" y2="84" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <polygon points="695,34 772,84 695,134 618,84" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="695" y="76" fill="white" font-size="10" font-weight="600" text-anchor="middle">Safe semantic-</text>
+        <text x="695" y="91" fill="white" font-size="10" font-weight="600" text-anchor="middle">cache match?</text>
+        <line x1="772" y1="84" x2="825" y2="84" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <text x="798" y="73" fill="#34d399" font-size="9" text-anchor="middle">Yes</text>
+        <rect x="827" y="55" width="235" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="944" y="79" fill="white" font-size="11" font-weight="600" text-anchor="middle">Return scoped cached answer</text>
+        <path d="M 695 134 L 695 178 L 550 178 L 550 215" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <text x="715" y="157" fill="#fb7185" font-size="9">No</text>
+        <rect x="455" y="217" width="190" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="550" y="251" fill="white" font-size="12" font-weight="600" text-anchor="middle">Model router</text>
+        <path d="M 500 275 L 228 328" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <path d="M 550 275 L 550 328" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <path d="M 600 275 L 872 328" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <rect x="115" y="330" width="225" height="58" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="227" y="364" fill="white" font-size="11" font-weight="600" text-anchor="middle">Small or local model</text>
+        <rect x="438" y="330" width="225" height="58" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="550" y="364" fill="white" font-size="11" font-weight="600" text-anchor="middle">Lower-cost cloud model</text>
+        <rect x="760" y="330" width="225" height="58" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="872" y="364" fill="white" font-size="11" font-weight="600" text-anchor="middle">High-capability model</text>
+        <path d="M 227 388 L 430 435" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <line x1="550" y1="388" x2="550" y2="425" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <path d="M 872 388 L 670 435" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <rect x="460" y="427" width="180" height="48" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="550" y="456" fill="white" font-size="11" font-weight="600" text-anchor="middle">Validate answer</text>
+        <line x1="640" y1="451" x2="700" y2="451" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <rect x="702" y="427" width="180" height="48" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="792" y="456" fill="white" font-size="11" font-weight="600" text-anchor="middle">Save safe cache entry</text>
+        <line x1="882" y1="451" x2="925" y2="451" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah11)"/>
+        <rect x="927" y="427" width="145" height="48" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="999" y="456" fill="white" font-size="11" font-weight="600" text-anchor="middle">Stream response</text>
+        <rect x="25" y="447" width="300" height="62" rx="8" fill="rgba(136,19,55,0.25)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="175" y="473" fill="white" font-size="11" font-weight="600" text-anchor="middle">Measurements</text>
+        <text x="175" y="490" fill="#94a3b8" font-size="9" text-anchor="middle">route • score • cache • cost • response time</text>
+        <path d="M 695 134 L 285 447" fill="none" stroke="#fb7185" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah11)"/>
+        <path d="M 455 246 L 255 447" fill="none" stroke="#fb7185" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah11)"/>
+        <path d="M 438 359 L 300 447" fill="none" stroke="#fb7185" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah11)"/>
+      </svg>
+      <p class="diagram-caption">CHECK SCOPE → SEARCH BY MEANING → REUSE ONLY A SAFE MATCH; OTHERWISE ROUTE TO THE LEAST EXPENSIVE CAPABLE MODEL → VALIDATE, CACHE, STREAM, AND MEASURE</p>
+    </div>
+
+    <p>Meaning alone is never enough to make reuse safe. Cache entries need hard boundaries for customer identity, account state, permissions, time-sensitive facts, and tool results. Balance questions, changing interest rates, and requests whose answer depends on the current time should usually bypass reuse or have precise invalidation rules. Every decision should record the selected route, similarity score, reuse decision, cost, and response time as structured measurements.</p>
+
+    <p>Build the same controlled request set in Python and TypeScript and compare selected models, reuse decisions, and invalidation. The implementations should agree not just when reuse is allowed, but when it is refused. That comparison exposes language-specific defaults without pretending that a reused answer is automatically correct.</p>
+
+    <div class="finding"><b>A real bug to test for:</b> a cache key that omits customer or permission scope can offer a semantically similar private answer to the wrong user. Both implementations must prove that scoped keys and metadata filters block the candidate before its similarity score can authorize reuse.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s routing becomes a reviewed policy table: routine savings questions are answered by templates with no model at all, and only questions that need wording reach the model gateway. A semantic answer cache is not used in the first release, because every answer is rebuilt from that customer's fresh, frozen evidence. Skill Reporter applies the same budgeted routing policy for routine versus complex report requests.</div>
+  </article>
+
+  <!-- LESSON 16 -->
+  <article class="lesson" id="lesson-16">
+    <span class="lesson-tag">Lesson 16</span>
+    <h3>Local Model Integration &amp; Quantization</h3>
+    <div class="problem"><b>The problem:</b> routing every Eunomia request to remote models can violate cost targets, latency goals, or data-boundary policy. Local models reduce that dependency, but raw model sizes can exceed available hardware. Skill Reporter faces the same trade-off when report workloads must stay in controlled infrastructure.</div>
+
+    <p>A <span class="jargon">local model</span> (an AI model running on hardware controlled by the application owner rather than through an outside cloud request) should first be measured on its own. Record memory use, startup time, response time, and answer quality before connecting it to the agent. The act of producing answers is called <span class="jargon">inference</span> (running a trained model to produce an answer), and its practical cost includes loading the model as well as generating each <span class="jargon">token</span> (a small unit of text processed or produced by a model).</p>
+
+    <p><span class="jargon">Quantization</span> (reducing the numerical precision of a model so it uses less memory and often runs faster) can make local inference practical on smaller hardware, but the trade-off must be measured rather than assumed. Run the lower-precision model behind a local model server—a program on controlled hardware that accepts model requests—and compare model size, memory use, speed, and answer quality with the unmodified version.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 440">
+        <defs><marker id="ah16" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="30" y="160" width="145" height="58" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="102" y="194" fill="white" font-size="12" font-weight="600" text-anchor="middle">Agent request</text>
+        <line x1="175" y1="189" x2="225" y2="189" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah16)"/>
+        <rect x="227" y="150" width="180" height="78" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="317" y="181" fill="white" font-size="12" font-weight="600" text-anchor="middle">Task and risk check</text>
+        <text x="317" y="201" fill="#94a3b8" font-size="9" text-anchor="middle">suitability • policy • health</text>
+        <path d="M 407 168 L 467 103" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah16)"/>
+        <text x="424" y="119" fill="#34d399" font-size="9">Low risk and suitable</text>
+        <rect x="470" y="55" width="170" height="65" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="555" y="93" fill="white" font-size="12" font-weight="600" text-anchor="middle">Local model client</text>
+        <line x1="640" y1="87" x2="690" y2="87" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah16)"/>
+        <rect x="692" y="55" width="170" height="65" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="777" y="82" fill="white" font-size="12" font-weight="600" text-anchor="middle">Local model server</text>
+        <text x="777" y="101" fill="#94a3b8" font-size="9" text-anchor="middle">controlled endpoint</text>
+        <line x1="862" y1="87" x2="912" y2="87" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah16)"/>
+        <rect x="914" y="45" width="160" height="85" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="994" y="76" fill="white" font-size="11" font-weight="600" text-anchor="middle">Quantized model</text>
+        <text x="994" y="93" fill="#94a3b8" font-size="9" text-anchor="middle">on controlled</text>
+        <text x="994" y="108" fill="#94a3b8" font-size="9" text-anchor="middle">hardware</text>
+        <path d="M 407 211 L 540 274" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah16)"/>
+        <text x="452" y="252" fill="#fb7185" font-size="9">High-impact, complex,</text>
+        <text x="452" y="265" fill="#fb7185" font-size="9">or approved fallback</text>
+        <rect x="542" y="245" width="195" height="65" rx="8" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="639" y="283" fill="white" font-size="12" font-weight="600" text-anchor="middle">Approved cloud model</text>
+        <path d="M 994 130 L 860 198" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah16)"/>
+        <path d="M 737 277 L 860 224" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah16)"/>
+        <rect x="862" y="185" width="180" height="60" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="952" y="220" fill="white" font-size="12" font-weight="600" text-anchor="middle">Answer validation</text>
+        <line x1="952" y1="245" x2="952" y2="285" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah16)"/>
+        <rect x="862" y="287" width="180" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="952" y="320" fill="white" font-size="12" font-weight="600" text-anchor="middle">Stream response</text>
+        <rect x="245" y="355" width="530" height="58" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="510" y="381" fill="white" font-size="11" font-weight="600" text-anchor="middle">Health and performance measurements</text>
+        <text x="510" y="398" fill="#94a3b8" font-size="9" text-anchor="middle">startup • memory • latency • quality • failures • cancellation</text>
+        <path d="M 555 120 L 450 355" fill="none" stroke="#94a3b8" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah16)"/>
+        <path d="M 777 120 L 590 355" fill="none" stroke="#94a3b8" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah16)"/>
+        <path d="M 994 130 L 700 355" fill="none" stroke="#94a3b8" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah16)"/>
+        <path d="M 639 310 L 570 355" fill="none" stroke="#94a3b8" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah16)"/>
+      </svg>
+      <p class="diagram-caption">CHECK TASK, IMPACT, AND DATA-EGRESS POLICY → USE THE LOCAL QUANTIZED MODEL WHEN SUITABLE → USE CLOUD ONLY WHEN REMOTE PROCESSING IS APPROVED → FAIL CLOSED FOR LOCALITY-RESTRICTED WORK → VALIDATE, STREAM, AND MEASURE</p>
+    </div>
+
+    <p>Put local and cloud providers behind one interface so the rest of the agent workflow does not care which one answered. Protect the local path with a <span class="jargon">health check</span> (a probe that reports whether a service can accept work), request time limits, <span class="jargon">bounded retries</span> (repeated attempts capped at a fixed count), and a <span class="jargon">circuit breaker</span> (a guard that temporarily stops requests to a repeatedly failing service). A <span class="jargon">fallback</span> (a backup route used when the preferred model is unavailable or unsuitable) may use the approved cloud model only when policy permits the prompt to leave the controlled environment. Locality-restricted requests must fail closed or use another approved in-boundary provider; high-impact or complex requests are a separate category and may use cloud only under the same data-egress policy.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+from collections.abc import Awaitable, Callable
+
+Provider = Callable[[str], Awaitable[str]]
+
+async def answer(prompt: str, risk: str, remote_allowed: bool, local: Provider,
+                 cloud: Provider) -&gt; str:
+    if risk != "low":
+        if not remote_allowed:
+            raise PermissionError("No approved provider can process this request")
+        return await cloud(prompt)
+    try:
+        async with asyncio.timeout(3):
+            return await local(prompt)
+    except (TimeoutError, ConnectionError):
+        if not remote_allowed:
+            raise
+        return await cloud(prompt)</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type Provider = (prompt: string, signal?: AbortSignal) =&gt; Promise&lt;string&gt;;
+
+function isLocalUnavailable(error: unknown): boolean {
+  return error instanceof DOMException &amp;&amp; error.name === "TimeoutError" || error instanceof TypeError;
+}
+
+async function answer(
+  prompt: string,
+  risk: "low" | "high",
+  remoteAllowed: boolean,
+  local: Provider,
+  cloud: Provider,
+): Promise&lt;string&gt; {
+  if (risk !== "low") {
+    if (!remoteAllowed) throw new Error("No approved provider can process this request");
+    return cloud(prompt);
+  }
+
+  try {
+    return await local(prompt, AbortSignal.timeout(3_000));
+  } catch (error) {
+    if (!isLocalUnavailable(error) || !remoteAllowed) throw error;
+    return cloud(prompt);
+  }
+}</code></pre></div>
+
+    <p>Private prompts and generated text must not leak into unsafe logs merely because the server is local. Matching Python and TypeScript clients should run the same prompts and report differences in startup behavior, streaming chunks, error shapes, and cancellation handling, not hide those differences behind a common interface.</p>
+
+    <blockquote>A local endpoint removes one network boundary; it does not remove the need for timeouts, privacy controls, answer validation, or an approved fallback.</blockquote>
+
+    <div class="finding"><b>An honest performance finding:</b> the local server’s first request is often far slower than later requests because it must load the model into memory. Report <span class="jargon">cold-start performance</span> (speed before the service and model are fully loaded) separately from <span class="jargon">steady-state performance</span> (speed after startup work is complete); averaging them together gives neither operators nor customers a useful expectation.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s provider chain can include a smaller quantized local model as one adapter behind the model gateway, with an approved fallback for difficult savings questions. The run manifest pins whichever chain is released, so a local model is adopted only after it passes the same quality gate. Skill Reporter mirrors the same quantized-local plus approved-fallback setup.</div>
+  </article>
+
+  <!-- LESSON 22 -->
+  <article class="lesson" id="lesson-22">
+    <span class="lesson-tag">Lesson 22</span>
+    <h3>Context Caching &amp; Prompt Compression</h3>
+    <div class="problem"><b>The problem:</b> Eunomia repeatedly re-sends fixed instructions and long prior turns, increasing token spend and latency until context limits are hit. Skill Reporter has the same growth problem as report conversations and artifacts accumulate unless reusable context is separated from per-turn state.</div>
+
+    <p>A model’s <span class="jargon">context window</span> (the maximum amount of text and other input a model can consider in one request) has to hold system instructions, policy text, tool descriptions, retrieved documents, conversation turns, and the current question. A <span class="jargon">token budget</span> (the planned limit on the small text units sent to and generated by a model) assigns space to those parts before one of them silently crowds out another.</p>
+
+    <p>Separate stable instructions from changing customer content. The <span class="jargon">stable prefix</span> (the unchanged opening portion of a prompt) can then use <span class="jargon">context caching</span> (reusing the model provider’s earlier processing of a repeated prompt prefix). Measure request size, reported <span class="jargon">cache hits and misses</span> (whether reusable work was found or a fresh request was needed), response time, and cost for both cached and uncached calls; a provider-reported hit does not guarantee a meaningful saving if the prefix is small or the rest of the request dominates.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 520">
+        <defs><marker id="ah22" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="35" width="175" height="55" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="112" y="68" fill="white" font-size="11" font-weight="600" text-anchor="middle">Stable instructions</text>
+        <rect x="25" y="130" width="175" height="55" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="112" y="163" fill="white" font-size="11" font-weight="600" text-anchor="middle">Older conversation</text>
+        <rect x="25" y="225" width="175" height="55" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="112" y="258" fill="white" font-size="11" font-weight="600" text-anchor="middle">Recent turns</text>
+        <rect x="25" y="320" width="175" height="55" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="112" y="353" fill="white" font-size="11" font-weight="600" text-anchor="middle">Current question</text>
+        <line x1="200" y1="62" x2="280" y2="62" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <rect x="282" y="35" width="230" height="55" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="397" y="68" fill="white" font-size="11" font-weight="600" text-anchor="middle">Context-cacheable prefix</text>
+        <line x1="200" y1="157" x2="280" y2="157" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <rect x="282" y="120" width="230" height="75" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="397" y="150" fill="white" font-size="11" font-weight="600" text-anchor="middle">Compression and</text>
+        <text x="397" y="167" fill="white" font-size="11" font-weight="600" text-anchor="middle">fact-preservation check</text>
+        <path d="M 512 62 L 610 202" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <path d="M 512 157 L 610 215" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <path d="M 200 252 L 610 230" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <path d="M 200 347 L 610 245" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <rect x="612" y="190" width="170" height="70" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="697" y="220" fill="white" font-size="12" font-weight="600" text-anchor="middle">Prompt assembler</text>
+        <text x="697" y="240" fill="#94a3b8" font-size="9" text-anchor="middle">ordered sections</text>
+        <line x1="782" y1="225" x2="830" y2="225" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <polygon points="900,175 970,225 900,275 830,225" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="900" y="218" fill="white" font-size="10" font-weight="600" text-anchor="middle">Within token</text>
+        <text x="900" y="233" fill="white" font-size="10" font-weight="600" text-anchor="middle">budget?</text>
+        <path d="M 900 275 L 900 320 L 397 320 L 397 197" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <text x="650" y="312" fill="#fb7185" font-size="9" text-anchor="middle">No — compress again without losing protected facts</text>
+        <line x1="970" y1="225" x2="1022" y2="225" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <text x="993" y="214" fill="#34d399" font-size="9" text-anchor="middle">Yes</text>
+        <rect x="970" y="300" width="110" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="1025" y="333" fill="white" font-size="11" font-weight="600" text-anchor="middle">Model request</text>
+        <path d="M 1025 275 L 1025 298" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <line x1="970" y1="327" x2="875" y2="327" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah22)"/>
+        <rect x="705" y="300" width="168" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="789" y="333" fill="white" font-size="11" font-weight="600" text-anchor="middle">Stream response</text>
+        <rect x="565" y="405" width="450" height="65" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="790" y="433" fill="white" font-size="11" font-weight="600" text-anchor="middle">Cost, tokens, cache use, and latency</text>
+        <text x="790" y="451" fill="#94a3b8" font-size="9" text-anchor="middle">plus any information lost during compression</text>
+        <line x1="1025" y1="355" x2="890" y2="405" stroke="#94a3b8" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah22)"/>
+      </svg>
+      <p class="diagram-caption">CACHE THE STABLE PREFIX → COMPRESS OLD HISTORY WITH FACT CHECKS → ASSEMBLE IT WITH RECENT TURNS AND THE CURRENT QUESTION → LOOP UNTIL THE PROMPT FITS → REQUEST, STREAM, AND MEASURE</p>
+    </div>
+
+    <p><span class="jargon">Prompt compression</span> (shortening input while preserving the facts and instructions needed for the current task) should follow a policy, not an improvised “summarize this” request. Keep recent turns verbatim, summarize older turns, retain unresolved tasks and durable preferences, and protect amounts, dates, account constraints, consent decisions, and safety instructions from <span class="jargon">lossy summarization</span> (shortening that discards some original information). Rebuild the prompt in a fixed order: stable prefix, compressed history, recent messages, then the current question.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from collections.abc import Awaitable, Callable
+
+async def build_prompt(stable: str, turns: list[str], question: str,
+                       protected: list[str],
+                       summarize: Callable[[list[str]], Awaitable[str]],
+                       budget: int = 4_000, output_reserve: int = 800) -&gt; str:
+    input_limit = budget - output_reserve
+    if input_limit &lt;= 0:
+        raise ValueError("Output reserve must be smaller than the token budget")
+    recent = turns[-4:]
+    compressible = turns[:-4]
+    separator = chr(10) * 2
+    for _ in range(3):
+        compressed = await summarize(compressible) if compressible else ""
+        if compressed and not preserves(compressed, protected):
+            raise ValueError("Compression removed protected content")
+        sections = [stable, compressed, *recent, question]
+        prompt = separator.join(section for section in sections if section)
+        if token_count(prompt) &lt;= input_limit:
+            return prompt
+        if not recent:
+            break
+        compressible.extend(recent[:2])
+        recent = recent[2:]
+    raise ValueError("Protected prompt content cannot fit within the token budget")</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>async function buildPrompt(
+  stable: string,
+  turns: string[],
+  question: string,
+  protectedFacts: string[],
+  summarize: (turns: string[]) =&gt; Promise&lt;string&gt;,
+  budget = 4_000,
+  outputReserve = 800,
+): Promise&lt;string&gt; {
+  const inputLimit = budget - outputReserve;
+  if (inputLimit &lt;= 0) throw new Error("Output reserve must be smaller than the token budget");
+  let recent = turns.slice(-4);
+  const compressible = turns.slice(0, -4);
+  const separator = String.fromCharCode(10, 10);
+  for (let round = 0; round &lt; 3; round += 1) {
+    const compressed = compressible.length ? await summarize(compressible) : "";
+    if (compressed &amp;&amp; !preserves(compressed, protectedFacts)) {
+      throw new Error("Compression removed protected content");
+    }
+    const prompt = [stable, compressed, ...recent, question].filter(Boolean).join(separator);
+    if (tokenCount(prompt) &lt;= inputLimit) return prompt;
+    if (!recent.length) break;
+    compressible.push(...recent.slice(0, 2));
+    recent = recent.slice(2);
+  }
+  throw new Error("Protected prompt content cannot fit within the token budget");
+}</code></pre></div>
+
+    <p>Implement that prompt builder in Python and TypeScript. The same input must produce the same ordered sections and obey the same limits in both versions. Report actual request size, cache usage, response time, cost, and any information lost during compression rather than presenting token reduction alone as success.</p>
+
+    <div class="finding"><b>A real bug to test for:</b> a changing request identifier or timestamp placed inside the supposedly stable prefix invalidates the provider’s context cache on every call. Move changing data after the stable prefix, then verify that reuse returns instead of trusting the prompt’s visual similarity.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> can reuse its stable operating instructions, the prompt pinned by hash in each run manifest, so repeated turns stay affordable and fast. Compressing older customer dialogue is deferred: in the first release each turn is built from its own frozen evidence, not from a growing transcript. Skill Reporter uses the same instruction reuse, and context compaction for long report threads.</div>
+  </article>
+
+  <!-- LESSON 31 -->
+  <article class="lesson" id="lesson-31">
+    <span class="lesson-tag">Lesson 31</span>
+    <h3>Dynamic Few-Shot Prompt Calibration</h3>
+    <div class="problem"><b>The problem:</b> static examples can improve Eunomia behavior for some requests but degrade others by adding irrelevant tokens and biasing responses. Skill Reporter has the same issue when one fixed few-shot set is applied to every report type regardless of context.</div>
+
+    <p><span class="jargon">Few-shot examples</span> (a small set of sample questions and good answers placed in the prompt) should come from an approved library, not from raw customer conversations or unreviewed model output. Each entry needs an identifier, question, approved answer, topic, risk level, tool requirements, and version. Establish both a no-example baseline and a fixed-example baseline before building anything more elaborate.</p>
+
+    <p><span class="jargon">Dynamic selection</span> (choosing examples at request time rather than always using a fixed list) represents the current question and candidate examples by meaning, then filters by safety, topic, and required capabilities. Select a small, diverse set instead of several near-duplicates, enforce a strict token budget for examples, and use no examples when no candidate is relevant enough. That no-example branch is a designed success path, not a retrieval failure.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass
+@dataclass(frozen=True)
+class Example:
+    id: str
+    topic: str
+    risk: str
+    required_capabilities: frozenset[str]
+    tokens: int
+    score: float
+    approved: bool
+def select_examples(candidates: list[Example], risk: str,
+                    capabilities: frozenset[str], budget: int = 500) -&gt; list[Example]:
+    selected: list[Example] = []
+    used_topics: set[str] = set()
+    for item in sorted(candidates, key=lambda x: x.score, reverse=True):
+        incompatible = item.risk != risk or not item.required_capabilities &lt;= capabilities
+        if incompatible or not item.approved or item.score &lt; 0.82 or item.topic in used_topics:
+            continue
+        if sum(example.tokens for example in selected) + item.tokens &gt; budget:
+            continue
+        selected.append(item)
+        used_topics.add(item.topic)
+    return selected[:3]</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type Example = {
+  id: string; topic: string; risk: "low" | "high";
+  requiredCapabilities: string[];
+  tokens: number;
+  score: number;
+  approved: boolean;
+};
+function selectExamples(
+  candidates: Example[],
+  risk: "low" | "high",
+  capabilities: Set&lt;string&gt;,
+  budget = 500,
+): Example[] {
+  const selected: Example[] = [];
+  const usedTopics = new Set&lt;string&gt;();
+  let spent = 0;
+  for (const item of candidates.toSorted((a, b) =&gt; b.score - a.score)) {
+    const unsupported = item.requiredCapabilities.some((name) =&gt; !capabilities.has(name));
+    if (item.risk !== risk || unsupported || !item.approved || item.score &lt; 0.82 || usedTopics.has(item.topic)) continue;
+    if (spent + item.tokens &gt; budget) continue;
+    selected.push(item);
+    usedTopics.add(item.topic);
+    spent += item.tokens;
+    if (selected.length === 3) break;
+  }
+  return selected;
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 430">
+        <defs><marker id="ah31" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="190" width="180" height="60" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="115" y="215" fill="white" font-size="11" font-weight="600" text-anchor="middle">Current customer</text>
+        <text x="115" y="232" fill="white" font-size="11" font-weight="600" text-anchor="middle">question</text>
+        <line x1="205" y1="220" x2="250" y2="220" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <rect x="252" y="190" width="170" height="60" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="337" y="215" fill="white" font-size="11" font-weight="600" text-anchor="middle">Topic and risk</text>
+        <text x="337" y="232" fill="white" font-size="11" font-weight="600" text-anchor="middle">filters</text>
+        <line x1="422" y1="220" x2="475" y2="220" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <rect x="477" y="185" width="205" height="70" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="579" y="214" fill="white" font-size="11" font-weight="600" text-anchor="middle">Meaning-based</text>
+        <text x="579" y="232" fill="white" font-size="11" font-weight="600" text-anchor="middle">example search</text>
+        <rect x="477" y="45" width="205" height="60" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="579" y="80" fill="white" font-size="11" font-weight="600" text-anchor="middle">Approved example library</text>
+        <line x1="579" y1="105" x2="579" y2="183" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <line x1="682" y1="220" x2="727" y2="220" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <rect x="729" y="180" width="190" height="80" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="824" y="211" fill="white" font-size="11" font-weight="600" text-anchor="middle">Diversity and</text>
+        <text x="824" y="229" fill="white" font-size="11" font-weight="600" text-anchor="middle">token-budget check</text>
+        <line x1="919" y1="220" x2="955" y2="220" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <polygon points="1015,172 1075,220 1015,268 955,220" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="1015" y="214" fill="white" font-size="9" font-weight="600" text-anchor="middle">Useful examples</text>
+        <text x="1015" y="228" fill="white" font-size="9" font-weight="600" text-anchor="middle">found?</text>
+        <path d="M 1015 172 L 1015 125 L 812 125" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <text x="947" y="116" fill="#34d399" font-size="9">Yes</text>
+        <rect x="610" y="98" width="200" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="710" y="131" fill="white" font-size="11" font-weight="600" text-anchor="middle">Prompt with selected examples</text>
+        <path d="M 1015 268 L 1015 315 L 812 315" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <text x="947" y="306" fill="#fb7185" font-size="9">No</text>
+        <rect x="610" y="288" width="200" height="55" rx="8" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="710" y="321" fill="white" font-size="11" font-weight="600" text-anchor="middle">Prompt without examples</text>
+        <path d="M 610 125 L 500 360" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <path d="M 610 315 L 500 375" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <rect x="345" y="350" width="155" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="422" y="383" fill="white" font-size="11" font-weight="600" text-anchor="middle">Model answer</text>
+        <line x1="345" y1="377" x2="300" y2="377" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah31)"/>
+        <rect x="25" y="345" width="273" height="65" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="161" y="373" fill="white" font-size="11" font-weight="600" text-anchor="middle">Quality, cost, and latency</text>
+        <text x="161" y="391" fill="#94a3b8" font-size="9" text-anchor="middle">evaluation</text>
+      </svg>
+      <p class="diagram-caption">FILTER THE APPROVED LIBRARY → SEARCH BY MEANING → ENFORCE DIVERSITY AND BUDGET → INCLUDE EXAMPLES ONLY WHEN USEFUL → MEASURE THE RESULT AGAINST THE NO-EXAMPLE PATH</p>
+    </div>
+
+    <p><span class="jargon">Calibration</span> (adjusting examples and decision rules so the model behaves consistently on the current kind of question) requires evidence. Implement identical selection rules in Python and TypeScript and compare chosen example identifiers, prompt size, response time, cost, and evaluated quality. Use an <span class="jargon">evaluation set</span> (a saved collection of test questions and expected properties used to measure whether a change helps), including <span class="jargon">held-out questions</span> (test questions not used to tune the selector). Otherwise the selector may simply learn the known test cases.</p>
+
+    <blockquote>Examples are not free guidance. They are extra input that must earn their place through measured improvement.</blockquote>
+
+    <div class="finding"><b>An honest finding:</b> this pattern may not help as much as expected. For simple or already well-instructed questions, example retrieval can cost more time and money than a small or inconsistent quality gain is worth. Enable dynamic few-shot prompting only for question types where evaluation shows a real benefit.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> can choose only the examples relevant to the customer’s present savings question—and skip them when they add no measured value—rather than paying to send the same examples every time. Skill Reporter applies the same adaptive example policy to report prompts.</div>
+  </article>
+
+  <!-- LESSON 38 -->
+  <article class="lesson" id="lesson-38">
+    <span class="lesson-tag">Lesson 38</span>
+    <h3>Streaming Multimodal Tool Calls with Vision</h3>
+    <div class="problem"><b>The problem:</b> Eunomia customers may submit screenshots or scanned statements instead of clean text. That adds multimodal context, tool decisions, and streamed progress states, while image text must never become automatic execution authority. Skill Reporter encounters the same multimodal risk when report evidence arrives as images or scans.</div>
+
+    <p>A <span class="jargon">multimodal model</span> (a model that can work with more than one kind of input, such as text and images) can receive customer text alongside a <span class="jargon">vision input</span> (an image supplied to a model for inspection). The upload path must enforce supported file types, byte limits, image dimensions, and access controls. Store accepted files in short-lived controlled storage and pass image data onward only when the current customer is authorized to access it.</p>
+
+    <p>While the model examines the image, <span class="jargon">streaming</span> (sending parts of a response as they become available rather than waiting for the complete answer) can carry safe progress events. Those events should say what stage is happening without exposing hidden reasoning or presenting an unverified observation as fact. If the model proposes a <span class="jargon">tool call</span> (a structured request asking application code to perform an allowed action), validate its arguments against a strict <span class="jargon">schema</span> (rules specifying the allowed fields and value types) and check the customer’s permissions before execution.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 480">
+        <defs><marker id="ah38" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="70" width="145" height="55" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="97" y="103" fill="white" font-size="11" font-weight="600" text-anchor="middle">Customer text</text>
+        <rect x="25" y="170" width="145" height="55" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="97" y="203" fill="white" font-size="11" font-weight="600" text-anchor="middle">Customer image</text>
+        <path d="M 170 97 L 245 135" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <path d="M 170 197 L 245 160" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <rect x="247" y="115" width="210" height="70" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="352" y="144" fill="white" font-size="11" font-weight="600" text-anchor="middle">Upload and permission</text>
+        <text x="352" y="162" fill="white" font-size="11" font-weight="600" text-anchor="middle">checks</text>
+        <line x1="457" y1="150" x2="515" y2="150" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <rect x="517" y="115" width="195" height="70" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="614" y="144" fill="white" font-size="11" font-weight="600" text-anchor="middle">Vision-capable model</text>
+        <text x="614" y="162" fill="#94a3b8" font-size="9" text-anchor="middle">observe, do not authorize</text>
+        <path d="M 614 115 L 614 55 L 895 55" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <text x="747" y="45" fill="#22d3ee" font-size="9" text-anchor="middle">Progress events</text>
+        <rect x="897" y="28" width="175" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="984" y="52" fill="white" font-size="11" font-weight="600" text-anchor="middle">Streaming response</text>
+        <text x="984" y="68" fill="white" font-size="11" font-weight="600" text-anchor="middle">channel</text>
+        <line x1="614" y1="185" x2="614" y2="235" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <rect x="527" y="237" width="175" height="55" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="614" y="270" fill="white" font-size="11" font-weight="600" text-anchor="middle">Proposed tool call</text>
+        <line x1="702" y1="264" x2="752" y2="264" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <rect x="754" y="225" width="250" height="78" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="879" y="255" fill="white" font-size="11" font-weight="600" text-anchor="middle">Schema, permission, and</text>
+        <text x="879" y="273" fill="white" font-size="11" font-weight="600" text-anchor="middle">safety validation</text>
+        <path d="M 879 303 L 879 350" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <rect x="777" y="352" width="204" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="879" y="385" fill="white" font-size="11" font-weight="600" text-anchor="middle">Approved tool execution</text>
+        <path d="M 777 379 L 614 379 L 614 187" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <text x="682" y="369" fill="#34d399" font-size="9">checked tool result</text>
+        <path d="M 1004 264 L 1050 264 L 1050 445 L 820 445" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <text x="1038" y="338" fill="#fb7185" font-size="9" text-anchor="end">Reject</text>
+        <rect x="545" y="418" width="273" height="55" rx="8" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="681" y="451" fill="white" font-size="11" font-weight="600" text-anchor="middle">Explain refusal or request clarification</text>
+        <path d="M 712 150 L 860 150" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah38)"/>
+        <rect x="862" y="122" width="175" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="949" y="155" fill="white" font-size="11" font-weight="600" text-anchor="middle">Final checked answer</text>
+        <path d="M 949 122 L 984 85" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah38)"/>
+      </svg>
+      <p class="diagram-caption">CHECK TEXT AND IMAGE ACCESS → STREAM SAFE PROGRESS → VALIDATE ANY PROPOSED TOOL CALL → RETURN THE CHECKED RESULT TO THE MODEL → EMIT ONE FINAL ANSWER OR A CLEAR REFUSAL</p>
+    </div>
+
+    <p>Observation and action are separate powers. Reading an amount or instruction in an image must never authorize a transfer, account change, or other consequential operation. After an approved tool finishes, feed its checked result back to the model and continue the same response stream. The stream needs an explicit event order so progress, tool request, tool result, final answer, and completion cannot arrive in an impossible sequence.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from collections.abc import AsyncIterator
+from typing import Any
+
+async def vision_stream(image: bytes, customer_id: str) -&gt; AsyncIterator[dict[str, Any]]:
+    upload = await temporary_uploads.store(image)
+    try:
+        yield {"type": "progress", "stage": "inspecting_image"}
+        proposal = await vision_model.inspect(upload)
+        if proposal.tool_call:
+            name = proposal.tool_call.name
+            arguments = TOOL_SCHEMAS[name].validate(proposal.tool_call.arguments)
+            await require_permission(customer_id, name)
+            yield {"type": "toolRequest", "name": name}
+            raw_result = await tools.execute(name, arguments)
+            checked = TOOL_OUTPUT_SCHEMAS[name].validate(raw_result)
+            visible = authorize_and_mask(customer_id, checked)
+            yield {"type": "toolResult", "result": visible}
+            proposal = await vision_model.continue_with(visible)
+        yield {"type": "final", "text": proposal.answer}
+        yield {"type": "done"}
+    finally:
+        await temporary_uploads.delete(upload)</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type StreamEvent =
+  | { type: "progress"; stage: string }
+  | { type: "toolRequest"; name: string }
+  | { type: "toolResult"; result: unknown }
+  | { type: "final"; text: string }
+  | { type: "done" };
+async function* visionStream(image: Uint8Array, customerId: string): AsyncGenerator&lt;StreamEvent&gt; {
+  const upload = await temporaryUploads.store(image);
+  try {
+    yield { type: "progress", stage: "inspecting_image" };
+    let response = await visionModel.inspect(upload);
+    if (response.toolCall) {
+      const name = response.toolCall.name;
+      const args = toolSchemas[name].parse(response.toolCall.arguments);
+      await requirePermission(customerId, name);
+      yield { type: "toolRequest", name };
+      const rawResult = await tools.execute(name, args);
+      const checked = toolOutputSchemas[name].parse(rawResult);
+      const visible = authorizeAndMask(customerId, checked);
+      yield { type: "toolResult", result: visible };
+      response = await visionModel.continueWith(visible);
+    }
+    yield { type: "final", text: response.answer };
+    yield { type: "done" };
+  } finally {
+    await temporaryUploads.delete(upload);
+  }
+}</code></pre></div>
+
+    <p>Build matching Python and TypeScript flows and compare event order, argument validation, cancellation, image handling, and cleanup. Test malformed files, unreadable text, contradictory image content, tool failures, client disconnects, and hostile instructions embedded inside an image. Temporary uploads must be removed on success, rejection, cancellation, and failure.</p>
+
+    <div class="finding"><b>A real bug to test for:</b> an asynchronous tool can still be running when careless code emits the final-answer event. The stream then appears complete and later produces more data. Both implementations need an enforced <span class="jargon">event state machine</span> (rules defining which stream event may follow which) and exactly one completion event after every required tool result has returned.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release accepts text only, but it already applies this lesson's typed-event principle: every kind of content gets its own event type. When customer screenshots are accepted in a later release, Eunomia can inspect one, use an approved read-only capability when needed, and stream clear progress without treating the image as permission to act. Skill Reporter uses the same multimodal-plus-approved-tool boundary for image-backed report evidence.</div>
+  </article>
+
+  <!-- LESSON 41 -->
+  <article class="lesson" id="lesson-41">
+    <span class="lesson-tag">Lesson 41</span>
+    <h3>Autonomous Graph Schema Evolution</h3>
+    <div class="problem"><b>The problem:</b> Eunomia knowledge graphs only encode relationships they already define. New financial entities or links can be misclassified if forced into old schemas, but uncontrolled schema rewrites can corrupt downstream retrieval. Skill Reporter has the same schema-evolution risk for reporting entities and relationships.</div>
+
+    <p>A <span class="jargon">knowledge graph</span> (a store of facts represented as things and the relationships between them) is governed by a <span class="jargon">schema</span> (the rules defining which kinds of things and relationships may be stored). When a new fact does not fit, the correct response is neither silent coercion nor immediate mutation. The agent should create a structured proposal containing a relationship name, source type, target type, precise meaning, evidence, and examples.</p>
+
+    <p><span class="jargon">Schema evolution</span> (a controlled change to those graph rules as new information appears) begins with <span class="jargon">deterministic checks</span> (checks whose result follows fixed rules rather than model judgment) for registered identifiers, inverse identifiers, and compatible source and target types. A <span class="jargon">canonical identifier</span> (the one stable identifier assigned to a relationship meaning) plus explicit inverse and direction metadata makes “product offers rate” recognizably the same conceptual path as “rate is offered by product.” Subtle overlap between different meanings still requires model and human review; string normalization alone cannot prove equivalence.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 520">
+        <defs><marker id="ah41" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="125" width="120" height="55" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="85" y="158" fill="white" font-size="11" font-weight="600" text-anchor="middle">New fact</text>
+        <line x1="145" y1="152" x2="190" y2="152" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <polygon points="265,100 340,152 265,204 190,152" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="265" y="146" fill="white" font-size="10" font-weight="600" text-anchor="middle">Fits current</text>
+        <text x="265" y="161" fill="white" font-size="10" font-weight="600" text-anchor="middle">schema?</text>
+        <path d="M 265 100 L 265 55 L 410 55" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <text x="305" y="45" fill="#34d399" font-size="9">Yes</text>
+        <rect x="412" y="28" width="180" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="502" y="61" fill="white" font-size="11" font-weight="600" text-anchor="middle">Validate and store fact</text>
+        <line x1="340" y1="152" x2="392" y2="152" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <text x="365" y="141" fill="#fb7185" font-size="9">No</text>
+        <rect x="394" y="120" width="205" height="65" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="496" y="147" fill="white" font-size="11" font-weight="600" text-anchor="middle">Structured relationship</text>
+        <text x="496" y="165" fill="white" font-size="11" font-weight="600" text-anchor="middle">proposal</text>
+        <line x1="599" y1="152" x2="644" y2="152" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <rect x="646" y="113" width="215" height="78" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="753" y="144" fill="white" font-size="11" font-weight="600" text-anchor="middle">Duplicate and</text>
+        <text x="753" y="162" fill="white" font-size="11" font-weight="600" text-anchor="middle">compatibility checks</text>
+        <line x1="861" y1="152" x2="906" y2="152" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <rect x="908" y="113" width="170" height="78" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="993" y="144" fill="white" font-size="11" font-weight="600" text-anchor="middle">Independent</text>
+        <text x="993" y="162" fill="white" font-size="11" font-weight="600" text-anchor="middle">evaluator agent</text>
+        <path d="M 993 191 L 993 245 L 845 245" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <text x="949" y="235" fill="#fb7185" font-size="9">Reject</text>
+        <rect x="600" y="218" width="243" height="55" rx="8" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="721" y="251" fill="white" font-size="11" font-weight="600" text-anchor="middle">Record reason; keep current schema</text>
+        <path d="M 1078 152 L 1090 152 L 1090 320 L 930 320" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <text x="1078" y="240" fill="#34d399" font-size="9" text-anchor="end">Approve</text>
+        <rect x="735" y="292" width="193" height="55" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="831" y="325" fill="white" font-size="11" font-weight="600" text-anchor="middle">Human or policy gate</text>
+        <line x1="735" y1="320" x2="690" y2="320" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <rect x="475" y="292" width="213" height="55" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="581" y="325" fill="white" font-size="11" font-weight="600" text-anchor="middle">Versioned rule change</text>
+        <line x1="475" y1="320" x2="430" y2="320" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <rect x="245" y="292" width="183" height="55" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="336" y="325" fill="white" font-size="11" font-weight="600" text-anchor="middle">Validation queries</text>
+        <line x1="245" y1="320" x2="200" y2="320" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <rect x="25" y="292" width="173" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="111" y="318" fill="white" font-size="11" font-weight="600" text-anchor="middle">Activate new</text>
+        <text x="111" y="335" fill="white" font-size="11" font-weight="600" text-anchor="middle">relationship</text>
+        <path d="M 336 347 L 336 405 L 560 405" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah41)"/>
+        <text x="400" y="395" fill="#fb7185" font-size="9">validation fails</text>
+        <rect x="562" y="377" width="250" height="55" rx="8" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="687" y="410" fill="white" font-size="11" font-weight="600" text-anchor="middle">Rollback to previous schema version</text>
+      </svg>
+      <p class="diagram-caption">STORE FACTS THAT FIT → PROPOSE RELATIONSHIPS THAT DO NOT → CHECK FOR DUPLICATES → EVALUATE AND GATE → MIGRATE A NEW VERSION → VALIDATE BEFORE ACTIVATION OR ROLL BACK</p>
+    </div>
+
+    <p>An <span class="jargon">evaluator agent</span> (a separate model-based reviewer that checks a proposal against explicit acceptance rules) should assess necessity, clarity, evidence, privacy risk, and compatibility. Model review is not enough for high-impact changes, so deterministic checks and human approval remain in the path. Proposal, approval, migration, and activation are separate states; approval alone never alters production data.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class RelationshipProposal:
+    canonical_id: str
+    inverse_id: str | None
+    source_type: str
+    target_type: str
+    meaning: str
+    examples: tuple[str, ...]
+    evidence: tuple[str, ...]
+
+async def evaluate_proposal(proposal: RelationshipProposal) -&gt; str:
+    identifiers = {proposal.canonical_id, proposal.inverse_id} - {None}
+    if identifiers &amp; REGISTERED_RELATIONSHIP_IDS:
+        return "rejected_duplicate"
+    if not types_compatible(proposal.source_type, proposal.target_type):
+        return "rejected_incompatible_types"
+    complete = proposal.meaning and proposal.examples and proposal.evidence
+    if not complete or not await evaluator.approve_meaning_and_overlap(proposal):
+        return "rejected_evidence"
+    await proposal_store.save(proposal, state="awaiting_human_approval")
+    return "awaiting_human_approval"</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface RelationshipProposal {
+  canonicalId: string;
+  inverseId?: string;
+  sourceType: string;
+  targetType: string;
+  meaning: string;
+  examples: string[];
+  evidence: string[];
+}
+type ProposalState = "rejected_duplicate" | "rejected_incompatible_types" | "rejected_evidence" | "awaiting_human_approval";
+async function evaluateProposal(proposal: RelationshipProposal): Promise&lt;ProposalState&gt; {
+  const identifiers = [proposal.canonicalId, proposal.inverseId].filter(
+    (value): value is string =&gt; value !== undefined,
+  );
+  if (identifiers.some((identifier) =&gt; registeredRelationshipIds.has(identifier))) {
+    return "rejected_duplicate";
+  }
+  if (!typesCompatible(proposal.sourceType, proposal.targetType)) {
+    return "rejected_incompatible_types";
+  }
+  const complete = proposal.meaning &amp;&amp; proposal.examples.length &amp;&amp; proposal.evidence.length;
+  if (!complete || !(await evaluator.approveMeaningAndOverlap(proposal))) {
+    return "rejected_evidence";
+  }
+  await proposalStore.save(proposal, "awaiting_human_approval");
+  return "awaiting_human_approval";
+}</code></pre></div>
+
+    <p>A <span class="jargon">schema migration</span> (a versioned operation that changes stored graph rules or data) must preserve an <span class="jargon">audit trail</span> (a reviewable record of proposals, decisions, and changes), run validation queries, and support rollback when new relationships create unexpected paths or conflicts. Run the same proposal and evaluation cases in Python and TypeScript, comparing structured outputs, rejection reasons, version changes, and rollback behavior.</p>
+
+    <div class="finding"><b>A real bug to test for:</b> an evaluator may approve a relationship that is only the reverse wording of an existing one, creating duplicate paths and conflicting queries. Registered canonical and inverse identifiers plus source-to-target type checks must reject it before activation.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release has no production knowledge graph to evolve, but the same propose-versus-apply separation governs what it does have: a strong production turn can be proposed as a new scenario but becomes one only after redaction and a person's approval, and catalogue or guidance changes ship only as new versions. If a graph is added later, Eunomia can propose new relationships without being allowed to rewrite it because one conversation introduced an unfamiliar one. Skill Reporter enforces the same propose-versus-apply separation for graph changes.</div>
+  </article>
+
+  <!-- LESSON 42 -->
+  <article class="lesson" id="lesson-42">
+    <span class="lesson-tag">Lesson 42</span>
+    <h3>Agentic Self-Compaction &amp; Hierarchical Memory Summarization</h3>
+    <div class="problem"><b>The problem:</b> long Eunomia conversations eventually exceed context windows. Trimming old turns blindly can drop prior commitments, corrections, and unresolved tasks; keeping everything is too expensive. Skill Reporter faces the same memory-loss versus cost trade-off across long report lifecycles.</div>
+
+    <p><span class="jargon">Self-compaction</span> (the agent’s process for replacing older detailed history with a shorter representation) must begin before the context limit is reached, not after a request fails. Divide state into recent verbatim turns, compacted summaries, durable customer preferences, unresolved tasks, and references to tool results. Each category has different retention rules; an unresolved task should not disappear merely because its original message is old.</p>
+
+    <p>A <span class="jargon">hierarchical summary</span> (memory organized at several levels, such as individual exchanges, conversation stages, and a whole-session summary) compacts small groups of turns into chunks, combines chunks into stage summaries, and maintains one top-level session view. Recent turns remain exact while older material becomes progressively smaller.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 520">
+        <defs><marker id="ah42" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="70" y="385" width="235" height="62" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="187" y="422" fill="white" font-size="12" font-weight="600" text-anchor="middle">Recent verbatim turns</text>
+        <rect x="70" y="230" width="235" height="62" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="187" y="267" fill="white" font-size="12" font-weight="600" text-anchor="middle">Conversation-stage summaries</text>
+        <rect x="70" y="75" width="235" height="62" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="187" y="112" fill="white" font-size="12" font-weight="600" text-anchor="middle">Whole-session summary</text>
+        <rect x="355" y="313" width="245" height="70" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="477" y="342" fill="white" font-size="11" font-weight="600" text-anchor="middle">Fact, correction, and</text>
+        <text x="477" y="360" fill="white" font-size="11" font-weight="600" text-anchor="middle">provenance validator</text>
+        <path d="M 305 416 L 355 365" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah42)"/>
+        <path d="M 477 313 L 305 272" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah42)"/>
+        <text x="335" y="326" fill="#34d399" font-size="9">compact at budget threshold</text>
+        <path d="M 355 348 L 325 348 L 325 472 L 187 472 L 187 449" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah42)"/>
+        <text x="270" y="488" fill="#fb7185" font-size="9">reject: keep source</text>
+        <rect x="355" y="158" width="245" height="70" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="477" y="187" fill="white" font-size="11" font-weight="600" text-anchor="middle">Fact, correction, and</text>
+        <text x="477" y="205" fill="white" font-size="11" font-weight="600" text-anchor="middle">provenance validator</text>
+        <path d="M 305 261 L 355 210" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah42)"/>
+        <path d="M 477 158 L 305 117" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah42)"/>
+        <text x="335" y="171" fill="#34d399" font-size="9">compact at budget threshold</text>
+        <path d="M 355 193 L 325 193 L 325 305 L 187 305 L 187 294" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah42)"/>
+        <text x="270" y="320" fill="#fb7185" font-size="9">reject: keep source</text>
+        <rect x="665" y="200" width="230" height="95" rx="8" fill="rgba(6,78,59,0.25)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="780" y="230" fill="white" font-size="11" font-weight="600" text-anchor="middle">Durable facts and</text>
+        <text x="780" y="248" fill="white" font-size="11" font-weight="600" text-anchor="middle">unresolved tasks</text>
+        <text x="780" y="270" fill="#94a3b8" font-size="9" text-anchor="middle">confirmed • corrected • pending</text>
+        <path d="M 665 218 L 305 106" fill="none" stroke="#34d399" stroke-width="1.2" marker-start="url(#ah42)" marker-end="url(#ah42)"/>
+        <path d="M 665 247 L 305 261" fill="none" stroke="#34d399" stroke-width="1.2" marker-start="url(#ah42)" marker-end="url(#ah42)"/>
+        <path d="M 665 276 L 305 416" fill="none" stroke="#34d399" stroke-width="1.2" marker-start="url(#ah42)" marker-end="url(#ah42)"/>
+        <path d="M 305 106 L 925 355" fill="none" stroke="#a78bfa" stroke-width="1.2" marker-end="url(#ah42)"/>
+        <path d="M 305 261 L 925 370" fill="none" stroke="#22d3ee" stroke-width="1.2" marker-end="url(#ah42)"/>
+        <path d="M 305 416 L 925 385" fill="none" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ah42)"/>
+        <rect x="925" y="335" width="150" height="70" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="1000" y="365" fill="white" font-size="11" font-weight="600" text-anchor="middle">Context builder</text>
+        <text x="1000" y="383" fill="#94a3b8" font-size="9" text-anchor="middle">selects all levels</text>
+        <line x1="1000" y1="405" x2="1000" y2="455" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah42)"/>
+        <rect x="925" y="457" width="150" height="50" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="1000" y="487" fill="white" font-size="11" font-weight="600" text-anchor="middle">Model request</text>
+      </svg>
+      <p class="diagram-caption">COMPACT RECENT TURNS INTO STAGES AND STAGES INTO A SESSION VIEW → VALIDATE FACTS, CORRECTIONS, AND SOURCES AT EACH STEP → KEEP DURABLE FACTS CONNECTED TO EVERY LEVEL → BUILD THE NEXT CONTEXT</p>
+    </div>
+
+    <p>A <span class="jargon">memory invariant</span> (a fact or rule that must remain true through every round of summarization) protects confirmed amounts, deadlines, consent choices, correction history, and promises made to the customer. <span class="jargon">Provenance</span> (a record of where a remembered fact originally came from) lets the agent retrieve or inspect the source turns behind an important claim rather than trusting a summary alone.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Summary:
+    id: str
+    text: str
+
+@dataclass
+class Memory:
+    recent: list[str]
+    stages: list[Summary]
+    session: Summary | None
+    invariants: dict[str, str]
+    sources: dict[str, list[str]]
+
+async def compact(memory: Memory, token_limit: int) -&gt; Memory:
+    if token_count(memory.recent) &gt;= int(token_limit * 0.75):
+        source_turns = memory.recent[:-4]
+        text = await summarizer.summarize(source_turns, memory.invariants)
+        if preserves(text, memory.invariants):
+            stage = Summary(stable_summary_id(source_turns), text)
+            memory.stages.append(stage)
+            memory.sources[stage.id] = [turn_id(turn) for turn in source_turns]
+            memory.recent = memory.recent[-4:]
+    stage_text = [stage.text for stage in memory.stages]
+    if token_count(stage_text) &gt;= int(token_limit * 0.5):
+        inputs = ([memory.session.text] if memory.session else []) + stage_text
+        text = await summarizer.summarize(inputs, memory.invariants)
+        if preserves(text, memory.invariants):
+            source_ids = ([memory.session.id] if memory.session else []) + [
+                stage.id for stage in memory.stages
+            ]
+            session = Summary(stable_summary_id(source_ids), text)
+            memory.sources[session.id] = source_ids
+            memory.session = session
+            memory.stages = []
+    return memory</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface Summary {
+  id: string;
+  text: string;
+}
+interface Memory {
+  recent: string[];
+  stages: Summary[];
+  session?: Summary;
+  invariants: Record&lt;string, string&gt;;
+  sources: Record&lt;string, string[]&gt;;
+}
+async function compact(memory: Memory, tokenLimit: number): Promise&lt;Memory&gt; {
+  let next = structuredClone(memory);
+  if (tokenCount(next.recent) &gt;= tokenLimit * 0.75) {
+    const sourceTurns = next.recent.slice(0, -4);
+    const text = await summarizer.summarize(sourceTurns, next.invariants);
+    if (preserves(text, next.invariants)) {
+      const stage = { id: stableSummaryId(sourceTurns), text };
+      next.stages.push(stage);
+      next.sources[stage.id] = sourceTurns.map(turnId);
+      next.recent = next.recent.slice(-4);
+    }
+  }
+  const stageText = next.stages.map((stage) =&gt; stage.text);
+  if (tokenCount(stageText) &gt;= tokenLimit * 0.5) {
+    const inputs = next.session ? [next.session.text, ...stageText] : stageText;
+    const text = await summarizer.summarize(inputs, next.invariants);
+    if (preserves(text, next.invariants)) {
+      const sourceIds = [next.session?.id, ...next.stages.map((stage) =&gt; stage.id)].filter(
+        (id): id is string =&gt; id !== undefined,
+      );
+      const session = { id: stableSummaryId(sourceIds), text };
+      next.sources[session.id] = sourceIds;
+      next = { ...next, stages: [], session };
+    }
+  }
+  return next;
+}</code></pre></div>
+
+    <p>Validate every new summary against the memory it replaces and refuse compaction when critical facts disappear or conflict. Python and TypeScript implementations should survive repeated compaction cycles with the same state shape, show real token reduction, and preserve source references. Tests need long conversations with corrections, changed preferences, abandoned goals, and unresolved tool calls—not only conversations where every new statement remains true forever.</p>
+
+    <div class="finding"><b>A real bug to test for:</b> an early value can survive in the top-level summary after the customer corrects it later. The memory format should retain the correction, mark the earlier value as superseded, and prevent both values from being presented as current truth.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release keeps no long-term conversation memory; each turn's facts come from fresh, frozen evidence. Hierarchical memory is deferred until Eunomia supports months-long conversations, when it must avoid sending every old message on every turn while preserving the customer's confirmed goals, corrections, and unfinished requests. Skill Reporter uses the same hierarchical memory strategy for long-lived reporting conversations.</div>
+  </article>
+
+  <!-- LESSON 43 -->
+  <article class="lesson" id="lesson-43">
+    <span class="lesson-tag">Lesson 43</span>
+    <h3>Autonomous Agent Self-Reflection &amp; Multi-Turn State Rollbacks</h3>
+    <div class="problem"><b>The problem:</b> one unsupported Eunomia assumption can cascade through later tool calls and recommendations. Retrying only the latest step preserves the original bad state, while full restart may repeat valid or external actions. Skill Reporter has the same rollback challenge when an early wrong premise contaminates later report stages.</div>
+
+    <p><span class="jargon">Self-reflection</span> (a structured check in which the agent evaluates whether recent decisions still satisfy the goal and rules) works only when the state is explicit. Represent each turn with the goal, plan, known facts, tool results, completed actions, and unresolved questions. Trigger reflection on meaningful signals—contradictory evidence, repeated tool failure, a violated constraint, or a failed result check—not after every ordinary turn.</p>
+
+    <p>A <span class="jargon">checkpoint</span> (a saved snapshot of the agent’s internal state at a known stage) should be written before important decisions and before any tool that may change the outside world. Reflection identifies the earliest unsupported decision and chooses a specific checkpoint. A <span class="jargon">rollback</span> (restoring internal state from an earlier checkpoint) then discards dependent reasoning while preserving evidence that was already valid.</p>
+
+    <p>An <span class="jargon">idempotency key</span> (a stable request identifier used to recognize a repeated operation) belongs in a durable <span class="jargon">action ledger</span> (a store recording each external operation and its outcome). Where reversal is possible, record a <span class="jargon">compensation step</span> (a separate operation that counteracts an earlier side effect). These controls protect external actions while reflection repairs internal state.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 560">
+        <defs><marker id="ah43" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="20" y="55" width="180" height="60" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="110" y="80" fill="white" font-size="11" font-weight="600" text-anchor="middle">Checkpoint A</text>
+        <text x="110" y="98" fill="#94a3b8" font-size="9" text-anchor="middle">verified state</text>
+        <line x1="200" y1="85" x2="240" y2="85" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <rect x="242" y="55" width="125" height="60" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="304" y="90" fill="white" font-size="11" font-weight="600" text-anchor="middle">Decision</text>
+        <line x1="367" y1="85" x2="407" y2="85" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <rect x="409" y="55" width="145" height="60" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="481" y="90" fill="white" font-size="11" font-weight="600" text-anchor="middle">Checkpoint B</text>
+        <line x1="554" y1="85" x2="594" y2="85" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <rect x="596" y="55" width="145" height="60" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="668" y="90" fill="white" font-size="11" font-weight="600" text-anchor="middle">Tool result</text>
+        <line x1="741" y1="85" x2="781" y2="85" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <rect x="783" y="55" width="155" height="60" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="860" y="90" fill="white" font-size="11" font-weight="600" text-anchor="middle">Current state</text>
+        <line x1="860" y1="115" x2="860" y2="170" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <rect x="702" y="172" width="316" height="70" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="860" y="201" fill="white" font-size="11" font-weight="600" text-anchor="middle">Reflection checks evidence, goal,</text>
+        <text x="860" y="219" fill="white" font-size="11" font-weight="600" text-anchor="middle">and rules</text>
+        <line x1="860" y1="242" x2="860" y2="285" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <polygon points="860,285 945,337 860,389 775,337" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="860" y="330" fill="white" font-size="10" font-weight="600" text-anchor="middle">Earlier decision</text>
+        <text x="860" y="345" fill="white" font-size="10" font-weight="600" text-anchor="middle">invalid?</text>
+        <path d="M 945 337 L 1015 337" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <text x="974" y="326" fill="#34d399" font-size="9">No</text>
+        <rect x="950" y="365" width="135" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="1017" y="389" fill="white" font-size="10" font-weight="600" text-anchor="middle">Continue</text>
+        <text x="1017" y="405" fill="white" font-size="10" font-weight="600" text-anchor="middle">current plan</text>
+        <path d="M 775 337 L 685 337" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <text x="730" y="326" fill="#fb7185" font-size="9">Yes</text>
+        <rect x="475" y="307" width="208" height="60" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="579" y="332" fill="white" font-size="11" font-weight="600" text-anchor="middle">Choose last valid</text>
+        <text x="579" y="350" fill="white" font-size="11" font-weight="600" text-anchor="middle">checkpoint</text>
+        <path d="M 530 307 C 430 240, 300 200, 110 117" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <path d="M 600 307 C 570 235, 520 190, 481 117" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <text x="392" y="205" fill="#a78bfa" font-size="9" text-anchor="middle">Checkpoint A or B</text>
+        <line x1="579" y1="367" x2="579" y2="410" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <rect x="475" y="412" width="208" height="55" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="579" y="445" fill="white" font-size="11" font-weight="600" text-anchor="middle">Create revised plan</text>
+        <path d="M 683 439 L 835 439" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah43)"/>
+        <rect x="837" y="412" width="165" height="55" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="919" y="445" fill="white" font-size="11" font-weight="600" text-anchor="middle">New current state</text>
+        <rect x="190" y="492" width="330" height="55" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="355" y="517" fill="white" font-size="11" font-weight="600" text-anchor="middle">External action ledger</text>
+        <text x="355" y="534" fill="#94a3b8" font-size="9" text-anchor="middle">idempotency key • original result • compensation status</text>
+        <path d="M 355 492 L 668 117" fill="none" stroke="#94a3b8" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah43)"/>
+        <path d="M 520 519 L 837 456" fill="none" stroke="#94a3b8" stroke-width="1.1" stroke-dasharray="5,4" marker-end="url(#ah43)"/>
+        <rect x="20" y="390" width="360" height="70" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="200" y="420" fill="#fb7185" font-size="12" font-weight="600" text-anchor="middle">WARNING</text>
+        <text x="200" y="440" fill="white" font-size="11" font-weight="600" text-anchor="middle">Rollback does not erase real-world side effects</text>
+      </svg>
+      <p class="diagram-caption">SAVE CHECKPOINTS → REFLECT ONLY ON FAILURE SIGNALS → IDENTIFY THE EARLIEST INVALID DECISION → RESTORE THE LAST VALID INTERNAL STATE → REVISE THE PLAN WHILE THE EXTERNAL ACTION LEDGER PREVENTS DUPLICATES</p>
+    </div>
+
+    <p>A <span class="jargon">side effect</span> (a real-world change outside the agent’s internal memory, such as updating a record or sending a message) is not undone by restoring memory. The durable ledger must atomically reserve a key with a fingerprint of the intended request before execution, reject reuse with a different payload, and mark the original result after completion. The external provider should also honor the key so a crash after execution but before ledger completion can be reconciled without blindly repeating the action. Human approval remains necessary where correction is consequential.</p>
+
+    <p>The snippets below illustrate checkpoint and replay primitives, not the complete reflection policy. A production state machine must still detect a stated trigger, identify the earliest unsupported decision, cap rollback depth, choose the last valid checkpoint, and create a revised plan. The in-memory checkpoint maps are teaching-only; the action ledger interface represents a durable store with an atomic reservation operation.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from copy import deepcopy
+from typing import Any
+
+checkpoints: dict[str, dict[str, Any]] = {}
+
+def checkpoint(name: str, state: dict[str, Any]) -&gt; None:
+    checkpoints[name] = deepcopy(state)
+
+def rollback(name: str) -&gt; dict[str, Any]:
+    return deepcopy(checkpoints[name])
+
+async def run_once(key: str, tool_name: str, arguments: dict[str, Any]) -&gt; Any:
+    fingerprint = request_fingerprint(tool_name, arguments)
+    claim = await action_ledger.reserve(key, fingerprint)
+    if claim.status == "completed":
+        return claim.result
+    if not claim.acquired:
+        return await action_ledger.wait_for_completion(key, fingerprint)
+    try:
+        result = await tools.execute(tool_name, arguments, idempotency_key=key)
+        await action_ledger.complete(key, fingerprint, result)
+        return result
+    except Exception:
+        await action_ledger.mark_outcome_unknown(key, fingerprint)
+        raise</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type State = { goal: string; facts: string[]; plan: string[] };
+const checkpoints = new Map&lt;string, State&gt;();
+function checkpoint(name: string, state: State): void {
+  checkpoints.set(name, structuredClone(state));
+}
+function rollback(name: string): State {
+  const saved = checkpoints.get(name);
+  if (!saved) throw new Error(`Unknown checkpoint: ${name}`);
+  return structuredClone(saved);
+}
+async function runOnce(key: string, toolName: string, args: unknown): Promise&lt;unknown&gt; {
+  const fingerprint = requestFingerprint(toolName, args);
+  const claim = await actionLedger.reserve(key, fingerprint);
+  if (claim.status === "completed") return claim.result;
+  if (!claim.acquired) return actionLedger.waitForCompletion(key, fingerprint);
+  try {
+    const result = await tools.execute(toolName, args, { idempotencyKey: key });
+    await actionLedger.complete(key, fingerprint, result);
+    return result;
+  } catch (error) {
+    await actionLedger.markOutcomeUnknown(key, fingerprint);
+    throw error;
+  }
+}</code></pre></div>
+
+    <p>Bound retry count and rollback depth so reflection cannot become an endless loop. Matching Python and TypeScript state machines should produce compatible checkpoint <span class="jargon">serialization</span> (conversion of state into a storable and transferable representation), select the same rollback target, avoid repeated tool effects, and reach the same final state. Test a multi-turn case where evidence disproves an early assumption several steps later: the corrected path must retain valid evidence while discarding only the decisions that depended on the false premise.</p>
+
+    <blockquote>Rollback is an internal state operation, not a time machine. Every design must say separately how already-completed external actions are detected, preserved, or compensated.</blockquote>
+
+    <div class="finding"><b>A real bug to test for:</b> after rollback, the revised plan may replay a tool call and create the same external action twice. A durable ledger with atomic reservation, request fingerprinting, and provider-side idempotency should make the second call return the first call’s recorded result instead.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> because <b>Eunomia</b>'s first release is read-only, recovering from a derailed turn never risks repeating a side effect, and a mistaken assumption fails verification against frozen evidence instead of cascading through later turns. Multi-turn rollback that preserves valid customer facts and stops rolled-back actions from running twice becomes necessary once write actions arrive. Skill Reporter follows the same rollback discipline to correct report-direction errors without replaying side effects.</div>
+  </article>
+</section>

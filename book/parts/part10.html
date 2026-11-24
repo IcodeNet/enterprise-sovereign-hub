@@ -1,0 +1,1019 @@
+<!-- ======================================================= -->
+<!-- PART X — BUILDING EUNOMIA -->
+<!-- ======================================================= -->
+<section class="part" id="part-10">
+  <div class="part-header">
+    <div class="part-eyebrow">Part X · Capstone</div>
+    <h2>Part X — Building Eunomia</h2>
+    <p class="part-intro">The previous nine parts built the pieces one at a time. This capstone puts the lessons together into one design for Eunomia's safe, read-only first release: a savings assistant that can answer questions about a customer's holdings, maturity dates and deposit protection, describe products from an approved catalogue, quote approved guidance, and hand the conversation to a person when it should not answer alone. The design is one TypeScript service plus a web client. Inside the service, plain business rules sit in the middle, the outside world is reached only through named interfaces, and every answer is built from evidence that can be fetched again later. The same release discipline is applied to Skill Reporter as a parallel domain track. Write actions (moving money, opening or closing accounts) are deliberately deferred. The target is an MVP (minimum viable product — the smallest version that is safe and useful in production), not a toy and not a distant wish list.</p>
+    <div class="reader-note">
+      <p><b>Dual-domain map for this capstone:</b> Eunomia and Skill Reporter ship through the same control stack.</p>
+      <ul>
+        <li><b>Eunomia track:</b> read-only savings answers with identity taken from the token, three coarse typed capabilities, an answer-mode sequence, a figure-checking verifier, traces, a quality gate, and independent contract probes.</li>
+        <li><b>Skill Reporter track:</b> read-only reporting answers with the same identity rule, typed capabilities, sequence, verifier, traces, quality gate, and independent probes.</li>
+      </ul>
+      <p><b>Integration chain:</b> this capstone composes Parts I–IX into one release boundary: typed contracts, a routing policy, deterministic domain rules, evidence-checked answers, observability, and CI gates all enforced before promotion.</p>
+    </div>
+
+    <div class="reader-note">
+      <p><b>Shared learner terms (book ↔ Eunomia UI):</b> the capstone and the Eunomia chat page use the same four terms so readers do not have to translate vocabulary across materials.</p>
+      <ul>
+        <li><b>Turn:</b> one customer message plus one Eunomia reply, created by <code class="inline">POST /v1/turns</code>.</li>
+        <li><b>Evidence:</b> the frozen bundle an answer was built from (snapshot, catalogue rows, guidance passages, each with a stable id), fetched with <code class="inline">GET /v1/turns/{id}/evidence</code>.</li>
+        <li><b>Review:</b> a request for a person to check one turn, sent with <code class="inline">POST /v1/turns/{id}/review</code>, raised by a handoff, or raised by the quality sampler.</li>
+        <li><b>Turn events:</b> the typed server-sent events the page listens to, from <code class="inline">turn.accepted</code> to one ending event such as <code class="inline">answer.final</code>.</li>
+      </ul>
+    </div>
+  </div>
+
+  <article class="capstone-section" id="capstone-full-graph">
+    <h3>Complete Eunomia architecture graph (one turn, end to end)</h3>
+    <div class="problem"><b>The problem:</b> readers can see strong individual controls in isolation, but still miss the full runtime chain from one customer message to one checked answer. Without the whole path in one place, it is hard to see that the order of the steps is what makes the answer trustworthy.</div>
+
+    <p>This section is the complete runtime path as one graph. It starts at the browser, takes identity only from the verified token, picks an answer mode from a fixed policy table, gathers evidence through three read-only capabilities, writes or renders an answer, checks every figure against that evidence, and only then streams it. Separate quality and probe paths sit outside the serving path. Every step matters, but the order is what enforces trust: nothing reaches the customer before it has been checked against evidence that was frozen first.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1200 820" role="img" aria-label="Complete Eunomia turn-to-answer architecture graph">
+        <defs>
+          <marker id="ah10full" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker>
+          <pattern id="grid10full" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M 36 0 L 0 0 0 36" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect width="100%" height="100%" fill="url(#grid10full)"/>
+
+        <text x="600" y="40" fill="white" font-size="20" font-weight="700" text-anchor="middle">Eunomia end-to-end turn graph</text>
+        <text x="600" y="62" fill="#94a3b8" font-size="12" text-anchor="middle">one customer message → one evidence-checked answer (or a person)</text>
+
+        <rect x="40" y="88" width="140" height="64" rx="8" fill="rgba(8,51,68,0.35)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="110" y="116" fill="white" font-size="12" font-weight="600" text-anchor="middle">1) Web client</text>
+        <text x="110" y="134" fill="#94a3b8" font-size="9" text-anchor="middle">POST /v1/turns</text>
+
+        <rect x="220" y="88" width="150" height="64" rx="8" fill="rgba(6,78,59,0.35)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="295" y="116" fill="white" font-size="12" font-weight="600" text-anchor="middle">2) Verify token</text>
+        <text x="295" y="134" fill="#94a3b8" font-size="9" text-anchor="middle">HTTP adapter · scope from token</text>
+
+        <rect x="410" y="88" width="160" height="64" rx="8" fill="rgba(120,53,15,0.28)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="490" y="116" fill="white" font-size="12" font-weight="600" text-anchor="middle">3) Open turn</text>
+        <text x="490" y="134" fill="#94a3b8" font-size="9" text-anchor="middle">turn.accepted + trace id</text>
+
+        <rect x="610" y="88" width="170" height="64" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="695" y="116" fill="white" font-size="12" font-weight="600" text-anchor="middle">4) Input screen</text>
+        <text x="695" y="134" fill="#94a3b8" font-size="9" text-anchor="middle">injection + advice line</text>
+
+        <rect x="820" y="88" width="170" height="64" rx="8" fill="rgba(76,29,149,0.35)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="905" y="116" fill="white" font-size="12" font-weight="600" text-anchor="middle">5) Routing policy</text>
+        <text x="905" y="134" fill="#94a3b8" font-size="9" text-anchor="middle">question type → starting step</text>
+
+        <rect x="1030" y="88" width="130" height="64" rx="8" fill="rgba(76,29,149,0.35)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="1095" y="116" fill="white" font-size="12" font-weight="600" text-anchor="middle">6) Gather evidence</text>
+        <text x="1095" y="134" fill="#94a3b8" font-size="9" text-anchor="middle">evidence planner · ports</text>
+
+        <path fill="none" d="M 180 120 L 220 120 M 370 120 L 410 120 M 570 120 L 610 120 M 780 120 L 820 120 M 990 120 L 1030 120" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah10full)"/>
+
+        <rect x="60" y="242" width="220" height="80" rx="8" fill="rgba(76,29,149,0.28)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="170" y="272" fill="white" font-size="12" font-weight="600" text-anchor="middle">7) Three capabilities</text>
+        <text x="170" y="290" fill="#94a3b8" font-size="10" text-anchor="middle">readSnapshot · queryCatalogue</text>
+        <text x="170" y="306" fill="#94a3b8" font-size="10" text-anchor="middle">lookupGuidance · Zod in/out</text>
+
+        <rect x="320" y="242" width="220" height="80" rx="8" fill="rgba(6,78,59,0.32)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="430" y="272" fill="white" font-size="12" font-weight="600" text-anchor="middle">8) evidence.ready</text>
+        <text x="430" y="290" fill="#94a3b8" font-size="10" text-anchor="middle">bundle frozen + stored</text>
+        <text x="430" y="306" fill="#94a3b8" font-size="10" text-anchor="middle">stable evidence ids</text>
+
+        <rect x="580" y="242" width="220" height="80" rx="8" fill="rgba(76,29,149,0.28)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="690" y="272" fill="white" font-size="12" font-weight="600" text-anchor="middle">9) Answer step</text>
+        <text x="690" y="290" fill="#94a3b8" font-size="10" text-anchor="middle">template (no model) or</text>
+        <text x="690" y="306" fill="#94a3b8" font-size="10" text-anchor="middle">composed (+1 requested call)</text>
+
+        <rect x="840" y="242" width="220" height="80" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="950" y="272" fill="white" font-size="12" font-weight="600" text-anchor="middle">10) Verifier</text>
+        <text x="950" y="290" fill="#94a3b8" font-size="10" text-anchor="middle">every figure + claim vs evidence</text>
+        <text x="950" y="306" fill="#94a3b8" font-size="10" text-anchor="middle">fail → drop one step</text>
+
+        <path fill="none" d="M 1095 152 L 1095 210 L 170 210 L 170 242" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah10full)"/>
+        <path fill="none" d="M 280 282 L 320 282 M 540 282 L 580 282 M 800 282 L 840 282" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah10full)"/>
+        <path fill="none" d="M 950 322 L 950 340 L 690 340 L 690 322" stroke="#fb7185" stroke-width="1.3" stroke-dasharray="5,4" marker-end="url(#ah10full)"/>
+
+        <rect x="130" y="400" width="240" height="90" rx="8" fill="rgba(8,51,68,0.35)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="250" y="432" fill="white" font-size="12" font-weight="600" text-anchor="middle">11) Stream checked answer</text>
+        <text x="250" y="450" fill="#94a3b8" font-size="10" text-anchor="middle">answer.delta → answer.final</text>
+        <text x="250" y="466" fill="#94a3b8" font-size="10" text-anchor="middle">only verified text leaves</text>
+
+        <rect x="410" y="400" width="240" height="90" rx="8" fill="rgba(120,53,15,0.28)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="530" y="432" fill="white" font-size="12" font-weight="600" text-anchor="middle">12) Or decline, or a person</text>
+        <text x="530" y="450" fill="#94a3b8" font-size="10" text-anchor="middle">turn.declined · handoff.offered</text>
+        <text x="530" y="466" fill="#94a3b8" font-size="10" text-anchor="middle">turn.failed on a hard error</text>
+
+        <rect x="690" y="400" width="240" height="90" rx="8" fill="rgba(30,41,59,0.45)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="810" y="432" fill="white" font-size="12" font-weight="600" text-anchor="middle">13) TraceSink</text>
+        <text x="810" y="450" fill="#94a3b8" font-size="10" text-anchor="middle">masked spans · step · verdict</text>
+        <text x="810" y="466" fill="#94a3b8" font-size="10" text-anchor="middle">evidence ids, never raw data</text>
+
+        <path fill="none" d="M 1000 322 L 1000 370 L 250 370 L 250 400" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah10full)"/>
+        <path fill="none" d="M 370 445 L 410 445 M 650 445 L 690 445" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah10full)"/>
+
+        <rect x="90" y="568" width="320" height="170" rx="10" fill="rgba(30,41,59,0.32)" stroke="#94a3b8" stroke-width="1.3"/>
+        <text x="250" y="596" fill="white" font-size="12" font-weight="700" text-anchor="middle">Serving path guardrails</text>
+        <text x="116" y="622" fill="#cbd5e1" font-size="10">• body fields can never widen customer scope</text>
+        <text x="116" y="642" fill="#cbd5e1" font-size="10">• protection is computed by domain code</text>
+        <text x="116" y="662" fill="#cbd5e1" font-size="10">• evidence frozen before any wording is written</text>
+        <text x="116" y="682" fill="#cbd5e1" font-size="10">• verifier checks figures before any delta</text>
+        <text x="116" y="702" fill="#cbd5e1" font-size="10">• breaker + per-turn budget around the model</text>
+
+        <rect x="450" y="568" width="300" height="170" rx="10" fill="rgba(120,53,15,0.24)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="600" y="596" fill="white" font-size="12" font-weight="700" text-anchor="middle">Quality plane (quality/)</text>
+        <text x="476" y="622" fill="#fde68a" font-size="10">• scenarios grouped by risk</text>
+        <text x="476" y="642" fill="#fde68a" font-size="10">• snapshot → replay → assert → archive</text>
+        <text x="476" y="662" fill="#fde68a" font-size="10">• run manifest pins model + hashes</text>
+        <text x="476" y="682" fill="#fde68a" font-size="10">• hash-sampled passes + all failures → review</text>
+        <text x="476" y="702" fill="#fde68a" font-size="10">• gate vs last approved manifest</text>
+
+        <rect x="790" y="568" width="320" height="170" rx="10" fill="rgba(8,51,68,0.30)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="950" y="596" fill="white" font-size="12" font-weight="700" text-anchor="middle">Independent probes (probes/)</text>
+        <text x="816" y="622" fill="#a5f3fc" font-size="10">• Python, HTTP only, no shared code</text>
+        <text x="816" y="642" fill="#a5f3fc" font-size="10">• stub upstream: latency · errors · bad payloads</text>
+        <text x="816" y="662" fill="#a5f3fc" font-size="10">• event order and exactly one ending event</text>
+        <text x="816" y="682" fill="#a5f3fc" font-size="10">• /livez and /readyz behaviour</text>
+        <text x="816" y="702" fill="#a5f3fc" font-size="10">• runs against any environment by URL</text>
+      </svg>
+      <p class="diagram-caption">COMPLETE TURN GRAPH: SERVING PATH + QUALITY PLANE + INDEPENDENT PROBES</p>
+    </div>
+
+    <p><b>Runtime breakdown from message to answer:</b></p>
+    <ol>
+      <li>The web client sends one message to <code class="inline">POST /v1/turns</code>, and the HTTP adapter first verifies the bearer token and builds the customer scope from the token alone; a body that tries to carry a customer id is rejected.</li>
+      <li>Only then is the turn opened, and the client immediately receives a <code class="inline">turn.accepted</code> event carrying the turn id and trace id.</li>
+      <li>An input screen catches known injection patterns and requests that cross the advice line (asking Eunomia to choose a product for the customer).</li>
+      <li>The routing policy table maps the question type to its starting answer step (template, composed, or handoff) before any evidence is gathered, because the step decides what evidence to gather.</li>
+      <li>The service's evidence planner, not the model, calls only the capabilities that question type and step need, through the ports.</li>
+      <li>Each capability validates its input and output with Zod and returns an evidence id.</li>
+      <li>The evidence bundle is frozen and stored, and <code class="inline">evidence.ready</code> tells the client which evidence ids exist.</li>
+      <li>The chosen step produces a draft: a template fills fixed wording from evidence with no model call; the composed step asks the ModelGateway to write from evidence only. On that step the model may instead request one more capability call through the same typed interface; the service validates and executes it, adds the result to the bundle under a new evidence id, and re-freezes the bundle before the model writes.</li>
+      <li>The verifier checks every figure, date and claim in the draft against the frozen evidence.</li>
+      <li>If verification fails, the turn drops one step and tries again; the last step is a person.</li>
+      <li>Only verified text is streamed as <code class="inline">answer.delta</code> events, closed by one <code class="inline">answer.final</code>. A screened-out request ends instead with <code class="inline">turn.declined</code> or <code class="inline">handoff.offered</code>, and a hard error with <code class="inline">turn.failed</code>.</li>
+      <li>The TraceSink records masked spans: step chosen, verifier verdict, evidence ids, timings, never raw balances or message text.</li>
+    </ol>
+
+    <blockquote>Eunomia does not trust a single model output. It trusts a path: evidence first, wording second, a check between the two, and a person waiting at the bottom of the sequence.</blockquote>
+  </article>
+
+  <article class="capstone-section" id="capstone-shape">
+    <h3>Ports and adapters: plain rules in the middle, the world at the edge</h3>
+    <div class="problem"><b>The problem:</b> Eunomia can use strong models and still fail as a production system if identity, data access, money rules, model calls and delivery are tangled together in one handler. A change to one provider or store then risks every control at once. Skill Reporter has the same architectural risk when reporting logic and its data sources are wired directly together.</div>
+
+    <p>Eunomia is one TypeScript service plus a web client, and the service is arranged as <span class="jargon">ports and adapters</span> (a layout where the core business code talks only to interfaces it owns, and separate adapter code plugs real systems into those interfaces). Think of a travel adaptor: the device (the domain) has one plug shape; the adaptor changes for each country (each provider or store). <code class="inline">domain/</code> holds pure rules: deposit protection per banking group, product facts, money as whole numbers of pence, the routing policy table and the verifier's rules. <code class="inline">answering/</code> holds the sequence runner, which uses those rules and the ports to run one turn. <code class="inline">ports/</code> holds seven interfaces the core depends on. <code class="inline">adapters/</code> holds the HTTP server, model providers, stores and telemetry. Outside the service, <code class="inline">quality/</code> owns scenarios and the release gate, <code class="inline">probes/</code> is an independent Python suite, and <code class="inline">web/</code> is the Next.js client.</p>
+
+    <p>This is the architectural form of Lesson 1's type-safe boundaries and Lesson 2's dependency injection (the core is handed its collaborators by trusted startup code instead of creating them itself), and Lesson 30's monorepo orchestration keeps service, quality suite, probes and client changing together in one repository. Scoping every port call to the token's customer applies Lesson 54's tenant-isolation principle (keeping one customer's data separate from another's) without implementing its per-tenant vector shards. The routing policy table is Lesson 5's conditional routing made explicit and testable.</p>
+
+    <p><b>Where decision-first routing fits:</b> Lesson 64 adds a decision-first routing layer before any model work. Here that layer is the routing policy table: a typed question type plus a confidence threshold picks the starting step before evidence is gathered. When the classifier is unsure about a mixed, high-risk message, the table sends it to the handoff step instead of forcing a risky answer.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 390" role="img" aria-label="Eunomia ports and adapters layout">
+        <defs>
+          <pattern id="grid10a" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
+          <marker id="ah10a" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/><rect width="100%" height="100%" fill="url(#grid10a)"/>
+
+        <rect x="230" y="30" width="520" height="310" rx="14" fill="rgba(30,41,59,0.35)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="490" y="52" fill="white" font-size="12" font-weight="700" text-anchor="middle">service · adapters/</text>
+        <text x="490" y="70" fill="#94a3b8" font-size="10" text-anchor="middle">http server (five routes) · model providers</text>
+        <text x="490" y="326" fill="#94a3b8" font-size="10" text-anchor="middle">stores (accounts · catalogue · guidance · turns + evidence) · telemetry</text>
+
+        <rect x="290" y="85" width="400" height="220" rx="12" fill="rgba(76,29,149,0.30)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="490" y="106" fill="white" font-size="12" font-weight="600" text-anchor="middle">ports/ (interfaces the core owns)</text>
+        <text x="490" y="124" fill="#94a3b8" font-size="10" text-anchor="middle">AccountReader · Catalogue · GuidanceStore · TurnStore</text>
+        <text x="490" y="296" fill="#94a3b8" font-size="10" text-anchor="middle">ModelGateway · TraceSink · ReviewInbox</text>
+
+        <rect x="360" y="134" width="260" height="96" rx="10" fill="rgba(6,78,59,0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="490" y="156" fill="white" font-size="13" font-weight="600" text-anchor="middle">domain/ (pure rules)</text>
+        <text x="490" y="176" fill="#94a3b8" font-size="10" text-anchor="middle">protection per banking group</text>
+        <text x="490" y="192" fill="#94a3b8" font-size="10" text-anchor="middle">product facts · money in pence</text>
+        <text x="490" y="208" fill="#94a3b8" font-size="10" text-anchor="middle">routing policy · verifier rules</text>
+        <text x="490" y="224" fill="#34d399" font-size="9" text-anchor="middle">imports nothing from adapters/</text>
+
+        <rect x="360" y="238" width="260" height="42" rx="8" fill="rgba(76,29,149,0.45)" stroke="#a78bfa" stroke-width="1.2"/>
+        <text x="490" y="255" fill="white" font-size="11" font-weight="600" text-anchor="middle">answering/ (sequence runner)</text>
+        <text x="490" y="271" fill="#94a3b8" font-size="9" text-anchor="middle">uses domain rules + ports · runs one turn</text>
+
+        <rect x="30" y="140" width="150" height="100" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="105" y="170" fill="white" font-size="13" font-weight="600" text-anchor="middle">web/</text>
+        <text x="105" y="191" fill="#94a3b8" font-size="10" text-anchor="middle">Next.js client</text>
+        <text x="105" y="207" fill="#94a3b8" font-size="10" text-anchor="middle">renders turn events</text>
+        <path fill="none" d="M 180 190 L 230 190" stroke="#22d3ee" stroke-width="1.6" marker-end="url(#ah10a)"/>
+
+        <rect x="800" y="55" width="170" height="110" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="885" y="84" fill="white" font-size="13" font-weight="600" text-anchor="middle">quality/</text>
+        <text x="885" y="105" fill="#94a3b8" font-size="10" text-anchor="middle">scenarios · rubrics</text>
+        <text x="885" y="121" fill="#94a3b8" font-size="10" text-anchor="middle">run manifests · gate</text>
+        <path fill="none" d="M 800 110 L 750 110" stroke="#fbbf24" stroke-width="1.6" marker-end="url(#ah10a)"/>
+
+        <rect x="800" y="215" width="170" height="110" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="885" y="244" fill="white" font-size="13" font-weight="600" text-anchor="middle">probes/</text>
+        <text x="885" y="265" fill="#94a3b8" font-size="10" text-anchor="middle">independent Python</text>
+        <text x="885" y="281" fill="#94a3b8" font-size="10" text-anchor="middle">HTTP only, no shared code</text>
+        <path fill="none" d="M 800 270 L 750 270" stroke="#fb7185" stroke-width="1.6" stroke-dasharray="5,4" marker-end="url(#ah10a)"/>
+
+        <text x="500" y="370" fill="#94a3b8" font-size="10" text-anchor="middle">Dependencies point inward: adapters know ports, answering/ knows ports and the domain, the domain knows nothing outside itself. Outside callers use HTTP.</text>
+      </svg>
+      <p class="diagram-caption">THE DOMAIN SITS IN THE MIDDLE; EVERY REAL SYSTEM PLUGS IN THROUGH A PORT</p>
+    </div>
+
+    <p>The ports are small on purpose. Each one is an interface (a TypeScript description of methods, with no code behind it), so a unit test can hand the core a tiny in-memory version, and a provider change touches one adapter file instead of the whole service.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>// service/src/ports/index.ts — interfaces only; nothing here imports from adapters/
+/** Every read a turn makes from the outside world takes the turn's AbortSignal, so a client that disconnects cancels that work.
+ *  Startup reads (Catalogue.version) and the stores that record what already happened (TurnStore, ReviewInbox) are left to finish, so the audit trail stays whole. */
+import type {
+  CapabilityResult, CatalogueFilter, ComposeReply, ComposeRequest, CustomerScope, EvidenceBundle, Gathered,
+  GuidanceTopic, OpenTurn, Passage, ProductFact, RawHoldings, ReviewItem, ReviewTicket, TraceEvent, TurnBudget,
+} from "../domain/types"
+
+export interface AccountReader {
+  holdingsFor(scope: CustomerScope, signal: AbortSignal): Promise&lt;RawHoldings&gt;
+}
+
+export interface Catalogue {
+  version(): Promise&lt;string&gt;
+  query(filter: CatalogueFilter, signal: AbortSignal): Promise&lt;readonly ProductFact[]&gt;
+}
+
+export interface GuidanceStore {
+  lookup(topic: GuidanceTopic, question: string, signal: AbortSignal): Promise&lt;readonly Passage[]&gt;
+}
+
+/** Turns and their frozen evidence bundles. evidenceFor returns null for another customer's turn, so the route answers 404. */
+export interface TurnStore {
+  open(input: { scope: CustomerScope; conversationId?: string }): Promise&lt;OpenTurn&gt;
+  freeze(turnId: string, gathered: Gathered): Promise&lt;EvidenceBundle&gt;
+  refreeze(turnId: string, bundle: EvidenceBundle, added: CapabilityResult): Promise&lt;EvidenceBundle&gt;   // new evidence id
+  evidenceFor(turnId: string, scope: CustomerScope): Promise&lt;EvidenceBundle | null&gt;
+}
+
+export interface ModelGateway {
+  compose(request: ComposeRequest, budget: TurnBudget, signal: AbortSignal): Promise&lt;ComposeReply&gt;   // a draft, or one capability request
+}
+
+export interface TraceSink {
+  record(event: TraceEvent): void
+}
+
+/** ReviewItem is one shape everywhere:
+ *  { kind: "customer-request" | "advice-line" | "routed-to-person" | "last-step" | "quality-run", turnId, evidenceId?, manifestId? }
+ *  evidenceId is absent only when the item is raised before any evidence is frozen (an advice request caught by the input screen). */
+export interface ReviewInbox {
+  submit(item: ReviewItem): Promise&lt;ReviewTicket&gt;
+}</code></pre></div>
+
+    <blockquote>A boundary is only real when dependency direction supports it. Adapters may import ports; the domain must not import adapters. The probes import neither.</blockquote>
+
+    <div class="finding"><b>Production rule:</b> keep the first release small in capability but complete in control. Three coarse read-only capabilities with token-derived scope, frozen evidence, a verifier, traces and a release gate are safer than a long list of fine-grained tools that nobody can audit.</div>
+  </article>
+
+  <article class="capstone-section" id="capstone-api">
+    <h3>The HTTP surface: five routes and one typed event stream</h3>
+    <div class="problem"><b>The problem:</b> a chat endpoint looks simple, but regulated savings answers cross several control points: who is asking, which data they may see, whether the request is admissible, what the answer was built from, and how the client learns that a turn ended badly. Skill Reporter crosses the same points for report requests and their sources.</div>
+
+    <p>The whole public surface is five routes. <code class="inline">POST /v1/turns</code> is authenticated and answers with a stream of typed <span class="jargon">server-sent events</span> (SSE — one-way messages from server to browser over an ordinary HTTP response): <code class="inline">turn.accepted</code>, <code class="inline">evidence.ready</code>, <code class="inline">answer.delta</code>, <code class="inline">answer.final</code>, <code class="inline">turn.declined</code>, <code class="inline">handoff.offered</code> and <code class="inline">turn.failed</code>. <code class="inline">GET /v1/turns/{id}/evidence</code> returns exactly what an answer was built from. <code class="inline">POST /v1/turns/{id}/review</code> asks a person to check a turn. <code class="inline">GET /livez</code> says the process is alive; <code class="inline">GET /readyz</code> says its stores and at least one model provider are reachable, so a load balancer stops sending traffic to an instance that cannot answer.</p>
+
+    <p>Identity and customer scope come only from the verified token. The request body is parsed with a strict schema, so a body that adds <code class="inline">customerId</code> is rejected rather than ignored. The input screen applies Lesson 20's input-attack and refusal controls before any model call; Lesson 13's programmatic output scan reappears inside the verifier after drafting. Token-derived scope applies the least-authority idea from Lesson 52 and the isolation idea from Lesson 54, but this read-only MVP does not implement Lesson 52's signed capability tokens or Lesson 54's per-tenant vector shards.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 290" role="img" aria-label="Eunomia turn lifecycle on POST /v1/turns">
+        <defs><marker id="ah10b" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <path fill="none" d="M 150 125 L 190 125 M 320 125 L 360 125 M 490 125 L 530 125 M 660 125 L 700 125 M 830 125 L 870 125" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah10b)"/>
+        <path fill="none" d="M 255 165 L 255 224" stroke="#fb7185" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#ah10b)"/>
+        <path fill="none" d="M 765 165 L 765 224" stroke="#fb7185" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#ah10b)"/>
+
+        <rect x="20" y="85" width="130" height="80" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="85" y="114" fill="white" font-size="12" font-weight="600" text-anchor="middle">Verify token</text><text x="85" y="136" fill="#94a3b8" font-size="9" text-anchor="middle">scope from claims</text>
+        <rect x="190" y="85" width="130" height="80" rx="8" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="255" y="114" fill="white" font-size="12" font-weight="600" text-anchor="middle">Screen + route</text><text x="255" y="136" fill="#94a3b8" font-size="9" text-anchor="middle">policy table</text>
+        <rect x="360" y="85" width="130" height="80" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="425" y="114" fill="white" font-size="12" font-weight="600" text-anchor="middle">Evidence</text><text x="425" y="136" fill="#94a3b8" font-size="9" text-anchor="middle">evidence.ready</text>
+        <rect x="530" y="85" width="130" height="80" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="595" y="114" fill="white" font-size="12" font-weight="600" text-anchor="middle">Draft</text><text x="595" y="136" fill="#94a3b8" font-size="9" text-anchor="middle">template or composed</text>
+        <rect x="700" y="85" width="130" height="80" rx="8" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="765" y="114" fill="white" font-size="12" font-weight="600" text-anchor="middle">Verify</text><text x="765" y="136" fill="#94a3b8" font-size="9" text-anchor="middle">figures + claims</text>
+        <rect x="870" y="85" width="110" height="80" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="925" y="114" fill="white" font-size="12" font-weight="600" text-anchor="middle">Stream</text><text x="925" y="136" fill="#94a3b8" font-size="9" text-anchor="middle">delta → final</text>
+        <rect x="175" y="225" width="160" height="42" rx="7" fill="rgba(136,19,55,0.25)" stroke="#fb7185"/><text x="255" y="251" fill="#fb7185" font-size="10" text-anchor="middle">decline or handoff, no model</text>
+        <rect x="680" y="225" width="170" height="42" rx="7" fill="rgba(136,19,55,0.25)" stroke="#fb7185"/><text x="765" y="251" fill="#fb7185" font-size="10" text-anchor="middle">drop one step, try again</text>
+      </svg>
+      <p class="diagram-caption">VERIFY TOKEN → SCREEN + ROUTE → FREEZE EVIDENCE → DRAFT → VERIFY → STREAM</p>
+    </div>
+
+    <p>The route itself stays thin. It parses the body, builds the scope, opens the turn through the <code class="inline">TurnStore</code> port, and forwards whatever events the core yields. The HTTP adapter wraps whichever Node web framework the team picks; the core never sees it.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { z } from "zod"
+
+const TurnBody = z.object({
+  message: z.string().trim().min(1).max(2_000),
+  conversationId: z.string().uuid().optional(),
+}).strict()   // unknown fields such as customerId are a 400, not silently dropped
+
+type RouteDeps = AnswerDependencies   // already holds turns: TurnStore, trace: TraceSink and reviewInbox: ReviewInbox
+
+export function registerTurnRoutes(http: HttpAdapter, deps: RouteDeps) {
+  http.post("/v1/turns", { auth: "required" }, async (request, events) =&gt; {
+    const body = TurnBody.parse(request.body)
+    const scope = scopeFromToken(request.verifiedToken)   // the only source of identity
+    const turn = await deps.turns.open({ scope, conversationId: body.conversationId })
+
+    events.send({ type: "turn.accepted", turnId: turn.id, traceId: turn.traceId })
+    try {
+      const run = runTurn({ turn, scope, message: body.message, signal: request.signal }, deps)
+      for await (const event of run) events.send(event)
+    } catch (error) {
+      deps.trace.record({ kind: "turn.error", turnId: turn.id, error: maskError(error) })
+      events.send({ type: "turn.failed", turnId: turn.id, code: "TURN_FAILED", retryable: isRetryable(error) })
+    } finally {
+      events.end()
+    }
+  })
+
+  http.get("/v1/turns/:id/evidence", { auth: "required" }, async (request) =&gt; {
+    const bundle = await deps.turns.evidenceFor(request.params.id, scopeFromToken(request.verifiedToken))
+    return bundle ?? http.notFound()   // someone else's turn is a 404, never a 403 that confirms it exists
+  })
+
+  http.post("/v1/turns/:id/review", { auth: "required" }, async (request) =&gt; {
+    const bundle = await deps.turns.evidenceFor(request.params.id, scopeFromToken(request.verifiedToken))
+    if (!bundle) return http.notFound()
+    return deps.reviewInbox.submit({ kind: "customer-request", turnId: request.params.id, evidenceId: bundle.id })
+  })
+}</code></pre></div>
+
+    <p>The event contract is a Zod <span class="jargon">discriminated union</span> (a set of object shapes told apart by one shared field, here <code class="inline">type</code>). Every event the server sends is parsed against it first, and the web client parses with the same contract, published from <code class="inline">contracts/turn/</code> as <code class="inline">@eunomia/turn-contract</code>. There is no "text with a magic prefix" anywhere on the wire.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>const EvidenceId = z.string().regex(/^(snap|cat|psg)_[a-z0-9]{10}$/)
+
+export const TurnEvent = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("turn.accepted"), turnId: z.string(), traceId: z.string() }),
+  z.object({ type: z.literal("evidence.ready"), turnId: z.string(), evidenceIds: z.array(EvidenceId) }),
+  z.object({ type: z.literal("answer.delta"), turnId: z.string(), seq: z.number().int().nonnegative(), text: z.string() }),
+  z.object({
+    type: z.literal("answer.final"),
+    turnId: z.string(),
+    mode: z.enum(["template", "composed"]),
+    text: z.string(),
+    citedEvidenceIds: z.array(EvidenceId).min(1),
+  }),
+  z.object({ type: z.literal("turn.declined"), turnId: z.string(), reason: z.string() }),   // a plain decline: no answer, no evidence to cite
+  z.object({ type: z.literal("handoff.offered"), turnId: z.string(), reason: z.string(), reviewTicket: z.string() }),
+  z.object({ type: z.literal("turn.failed"), turnId: z.string(), code: z.string(), retryable: z.boolean() }),
+])
+export type TurnEvent = z.infer&lt;typeof TurnEvent&gt;</code></pre></div>
+
+    <p>Notice what <code class="inline">answer.delta</code> does not mean. In the composed step the whole draft is verified before the first delta is sent, so deltas are pacing for the reader, not live model tokens as in Lesson 3's streaming typewriter. That costs a second or so of waiting, and it buys a hard guarantee: text already shown in a browser cannot be recalled, so only checked text is ever shown. Lesson 53's resilient-streaming contract still applies: every turn ends with exactly one of <code class="inline">answer.final</code>, <code class="inline">turn.declined</code>, <code class="inline">handoff.offered</code> or <code class="inline">turn.failed</code>. A plain decline gets its own ending event rather than an <code class="inline">answer.final</code>, because it has no evidence to cite.</p>
+
+    <div class="finding"><b>Important boundary:</b> the verifier is not the only lock. The strict body schema, token-only scope, input screen, frozen evidence and the ending-event rule each fail closed on their own, so a verifier bug does not silently open the other doors.</div>
+  </article>
+
+  <article class="capstone-section" id="capstone-agent-provider">
+    <h3>The answer-mode sequence and the model gateway</h3>
+    <div class="problem"><b>The problem:</b> if every question goes to the same model with the same freedom, Eunomia pays model cost and model risk even for questions ordinary code can answer exactly, and a provider outage takes the whole assistant down. Skill Reporter has the same problem when every report request is treated as a free-writing task for one provider.</div>
+
+    <p>Instead of several agent configurations, Eunomia has one <span class="jargon">answer-mode sequence</span> (an ordered list of ways to answer, from the most predictable to the most human) with three steps. <b>Template:</b> a deterministic answer filled straight from evidence, used when the question type allows it, such as "when does my fixed-term deposit mature?". <b>Composed:</b> the model writes from the frozen evidence only, then the verifier checks every figure and claim; if the planned bundle falls short, the model may request one more capability call, which the service executes and re-freezes into the bundle before the model writes (a second <code class="inline">evidence.ready</code> then lists the full set of ids). <b>Handoff:</b> a person. A routing policy table in <code class="inline">domain/</code> picks the starting step for each question type before any evidence is gathered, because the step decides what evidence to gather; the sequence runner in <code class="inline">answering/</code> receives that starting step. A failed verification drops the turn one step; it never climbs back up. Think of a staircase where you may only step down: each step trades a little automation for a little more safety.</p>
+
+    <p>This turns Lesson 37's model cascade into a cascade of answer modes rather than model sizes, makes Lesson 11's routing a reviewed table instead of an improvised choice, and puts Lesson 64's decision-first routing at the very top of the turn. Lesson 50's fallback routing lives one level down, inside the gateway.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>// service/src/domain/routing-policy.ts — pure, reviewed like code
+export type Step = "template" | "composed" | "handoff"
+/** TurnStore.open returns an OpenTurn; classification adds what the sequence needs to choose and render a step. */
+export type RoutedTurn = OpenTurn &amp; { questionType: QuestionType; confidence: number }
+
+/** A change to this table selects the advice-line and money-facts scenarios in CI. */
+const ROUTING_POLICY: Readonly&lt;Record&lt;QuestionType, Step&gt;&gt; = {
+  "maturity-date": "template",
+  "protection-coverage": "template",
+  "holdings-summary": "template",
+  "product-search": "composed",
+  "guidance": "composed",
+  "personal-recommendation": "handoff",   // the advice line: Eunomia explains, it does not choose
+  "unclear": "handoff",
+}
+export const startingStep = (type: QuestionType, confidence: number): Step =&gt;
+  confidence &gt;= 0.8 ? ROUTING_POLICY[type] : "handoff"
+const SEQUENCE: readonly Step[] = ["template", "composed", "handoff"]
+export const oneStepDown = (step: Step): Step =&gt; SEQUENCE[Math.min(SEQUENCE.indexOf(step) + 1, SEQUENCE.length - 1)]
+
+// service/src/answering/turn-runner.ts — the step is chosen first, because it decides what evidence to gather
+export async function* runTurn(input: TurnInput, deps: AnswerDependencies) {
+  const screened = screenInput(input.message)                             // injection and advice-line checks, no model involved
+  if (!screened.ok) {
+    yield* declineOrHandoff(input.turn, screened.reason, deps)            // turn.declined, or an "advice-line" review item (no evidenceId yet) + handoff.offered
+    return
+  }
+  const route = classify(input.message)                                   // { questionType, confidence }
+  const start = startingStep(route.questionType, route.confidence)
+  const gathered = await planEvidence(route.questionType, start, input.scope, deps.capabilities, input.signal)  // the service calls the capabilities
+  const evidence = await deps.turns.freeze(input.turn.id, gathered)       // frozen and stored before any wording
+  yield { type: "evidence.ready", turnId: input.turn.id, evidenceIds: [...evidence.ids] }
+  const routed: RoutedTurn = { ...input.turn, ...route }
+  yield* answer(routed, start, evidence, deps, input.signal)
+}
+
+// service/src/answering/sequence.ts — receives the starting step; it can only step down
+async function composeOrNull(deps: AnswerDependencies, turn: RoutedTurn, evidence: EvidenceBundle, signal: AbortSignal) {
+  try {
+    let reply = await deps.gateway.compose(composeRequest(turn, evidence, { mayRequest: true }), turn.budget, signal)
+    if (reply.kind === "capability-request") {                            // at most one extra call per turn
+      const added = await deps.capabilities.runRequested(reply.request, turn, deps.gateway, signal)  // Zod-checked; one Lesson 47 correction
+      evidence = await deps.turns.refreeze(turn.id, evidence, added)      // new evidence id, stored before the model writes
+      reply = await deps.gateway.compose(composeRequest(turn, evidence, { mayRequest: false }), turn.budget, signal)
+    }
+    return reply.kind === "draft" ? { draft: reply, evidence } : null
+  } catch (error) {
+    if (error instanceof GatewayUnavailable) return null    // a provider outage drops one step; it is not a failed turn
+    if (error instanceof CapabilityRequestRejected) return null   // still malformed after one correction
+    throw error
+  }
+}
+
+export async function* answer(turn: RoutedTurn, start: Step, frozen: EvidenceBundle, deps: AnswerDependencies, signal: AbortSignal) {
+  let step = start
+  let evidence = frozen
+
+  while (step !== "handoff") {
+    const attempt = step === "template"
+      ? { draft: renderTemplate(turn.questionType, evidence), evidence }   // draft is null when the evidence does not fit
+      : await composeOrNull(deps, turn, evidence, signal)                  // null when the provider chain is down or the request was rejected
+    if (attempt &amp;&amp; attempt.evidence !== evidence) {
+      evidence = attempt.evidence                                          // re-frozen with one requested result
+      yield { type: "evidence.ready", turnId: turn.id, evidenceIds: [...evidence.ids] }
+    }
+    const draft = attempt?.draft ?? null
+    const check = draft ? verifyDraft(draft, evidence) : { ok: false as const, problems: [step === "template" ? "no template fit" : "no usable draft"] }
+
+    deps.trace.record({ kind: "step.tried", turnId: turn.id, step, ok: check.ok, problems: check.ok ? [] : check.problems })
+    if (check.ok &amp;&amp; draft) {
+      yield* paceVerifiedText(turn.id, draft.text)
+      yield { type: "answer.final", turnId: turn.id, mode: step, text: draft.text, citedEvidenceIds: draft.citedEvidenceIds }
+      return
+    }
+    step = oneStepDown(step)
+  }
+
+  const kind = start === "handoff" ? "routed-to-person" : "last-step"     // the table chose a person, or every step was tried
+  const ticket = await deps.reviewInbox.submit({ kind, turnId: turn.id, evidenceId: evidence.id })
+  yield { type: "handoff.offered", turnId: turn.id, reason: "A colleague will check this for you.", reviewTicket: ticket.id }
+}</code></pre></div>
+
+    <p>The <code class="inline">ModelGateway</code> port hides providers behind one method. Its adapter holds a <span class="jargon">fallback chain</span> (an ordered list of providers to try), a <span class="jargon">circuit breaker</span> per provider (a switch that stops calling a provider for a cool-down period after repeated failures, like a fuse that trips instead of letting every request wait for a timeout), and a per-turn budget so a slow chain cannot run up unbounded cost or time. When the whole chain is unavailable, the gateway throws a typed error and the sequence drops to handoff. The request's abort signal is combined with each provider's timeout, so a customer who closes the page cancels the outstanding call instead of leaving it running.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>/** Lesson 29's token bucket: take() waits until the provider's pace allows one more call, or rejects if the signal aborts. */
+export interface TokenBucket { take(signal: AbortSignal): Promise&lt;void&gt; }
+
+export function createModelGateway(chain: readonly ProviderAdapter[], clock: Clock, pace: TokenBucket): ModelGateway {
+  const breakers = new Map(chain.map((p) =&gt; [p.id, new CircuitBreaker({ trips: 3, coolDownMs: 30_000, clock })]))
+
+  return {
+    async compose(request, budget, signal) {
+      for (const provider of chain) {
+        signal.throwIfAborted()                                              // the client left: stop trying providers
+        const breaker = breakers.get(provider.id)!
+        if (!breaker.isClosed()) continue
+        if (!budget.canSpend(provider.estimateCostPence(request), provider.timeoutMs)) continue
+
+        try {
+          await pace.take(signal)                                            // Lesson 29: a token bucket keeps calls within the provider's pace
+          const callSignal = AbortSignal.any([signal, AbortSignal.timeout(provider.timeoutMs)])   // disconnect or timeout aborts the call
+          const reply = await provider.compose(request, callSignal)
+          budget.spend(reply.usage.costPence)
+          breaker.recordSuccess()
+          return ComposeReply.parse(reply)   // structured output: a draft (text + claims + cited evidence ids) or one capability request
+        } catch (error) {
+          if (signal.aborted) throw error                                    // a disconnect is not the provider's fault
+          breaker.recordFailure()
+          budget.noteFailure(provider.id, error)
+        }
+      }
+      throw new GatewayUnavailable(budget.failures())
+    },
+  }
+}</code></pre></div>
+
+    <p>Every turn opens an OpenTelemetry <span class="jargon">span</span> (one timed unit of work inside a trace, which links work across services). Child spans cover the screen, each capability call, each step tried, each provider attempt and the verifier. They reach the outside world only through the <code class="inline">TraceSink</code> port, whose adapter masks attributes in the export path (the last step before telemetry leaves the service), so a caller that forgets to clean a field still cannot leak a balance. This is Lesson 7's trace tree joined with Lesson 17's distributed tracing. Record bounded metadata (ids, timings, step, verdict, evidence ids, provider, cost); the evidence store already holds the facts, so the tracing system must not become a second customer database.</p>
+
+    <div class="capstone-tie"><b>Capstone decision:</b> the routing table, templates, prompt and provider chain are versioned configuration, and each has a hash in the run manifest. Changing any of them is a release, gated like code. Eunomia and Skill Reporter share this promotion boundary.</div>
+  </article>
+
+  <article class="capstone-section" id="capstone-tools">
+    <h3>Three coarse capabilities, and the domain rules behind them</h3>
+    <div class="problem"><b>The problem:</b> model output can look valid while carrying unsafe arguments: another customer's identifier, an impossible term, a rate filter of 400 percent. Many fine-grained tools also give the model many chances to pick the wrong one or to do arithmetic it should not. Skill Reporter has the same risk when model-generated report arguments are not validated strictly.</div>
+
+    <p>There are exactly three read-only capabilities, each declared with Zod on both sides. The service's evidence planner calls the ones a question type needs before the evidence is frozen; the model never calls a store directly. On the composed step the model may request one further call through the same typed interface, and the service validates it, executes it, adds the result under a new evidence id and re-freezes the bundle before the model writes. <code class="inline">readSnapshot()</code> takes no arguments and returns one typed, already-scoped snapshot of the customer's holdings, maturities and protection. <code class="inline">queryCatalogue({ access, minTermMonths, maxTermMonths, minRatePercent })</code> filters the approved product catalogue. <code class="inline">lookupGuidance({ topic, question })</code> returns approved passages, each with a stable passage id. Every output carries an evidence id, which is what lets the verifier and the evidence route say exactly where a figure came from.</p>
+
+    <p>The capabilities are coarse on purpose. One snapshot call replaces a handful of small lookups, so the model cannot assemble a partial picture and fill the gap by guessing. This is Lesson 1's schema pattern and Lesson 2's injected dependencies turned into a security boundary: scope arrives from the verified token through the injected <code class="inline">AccountReader</code>, never from an argument. Domain refinements such as "the minimum term may not exceed the maximum" are Lesson 44's semantic guardrails (business rules beyond data shape). The design applies Lesson 52's least-authority principle without claiming its signed, per-action permission tokens.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { z } from "zod"
+
+const Pence = z.number().int().nonnegative().safe()
+const EvidenceId = z.string().regex(/^(snap|cat|psg)_[a-z0-9]{10}$/)
+
+export const CatalogueFilter = z.object({
+  access: z.enum(["easy-access", "notice", "fixed-term"]),
+  minTermMonths: z.number().int().min(0).max(120).optional(),
+  maxTermMonths: z.number().int().min(0).max(120).optional(),
+  minRatePercent: z.number().min(0).max(15).optional(),
+}).strict()
+export const GuidanceQuery = z.object({
+  topic: z.enum(["protection", "maturity", "withdrawals", "isa-basics", "interest-and-tax"]),
+  question: z.string().trim().min(3).max(400),
+}).strict()
+
+export const capabilities = {
+  readSnapshot: defineCapability({
+    description: "The signed-in customer's holdings, maturities and protection. Takes no arguments.",
+    input: z.object({}).strict(),
+    output: z.object({
+      evidenceId: EvidenceId,
+      asOf: z.string().datetime(),
+      holdings: z.array(z.object({
+        holdingRef: z.string(), productName: z.string(), bankingGroup: z.string(),
+        balancePence: Pence, ratePercent: z.number(), maturesOn: z.string().date().nullable(),
+      })),
+      protection: z.array(z.object({
+        bankingGroup: z.string(), eligiblePence: Pence, coveredPence: Pence, uncoveredPence: Pence, ruleVersion: z.string(),
+      })),
+    }),
+  }),
+  queryCatalogue: defineCapability({
+    description: "Products in the approved catalogue that match the filter.",
+    input: CatalogueFilter.refine((f) =&gt; (f.minTermMonths ?? 0) &lt;= (f.maxTermMonths ?? 120), "min term above max term"),
+    output: z.object({ evidenceId: EvidenceId, catalogueVersion: z.string(), products: z.array(ProductFact).max(20) }),
+  }),
+  lookupGuidance: defineCapability({
+    description: "Approved guidance passages for a topic, with stable passage ids.",
+    input: GuidanceQuery,
+    output: z.object({
+      evidenceId: EvidenceId,
+      passages: z.array(z.object({ passageId: z.string().regex(/^psg_/), heading: z.string(), text: z.string() })).max(4),
+    }),
+  }),
+} as const</code></pre></div>
+
+    <p>Protection is computed by domain code, never by the model. The scheme limit applies per person per <span class="jargon">banking group</span> (one licensed bank, which may sell under several brand names), so two brands in the same group share one limit. The function below works in whole pence so there is no rounding, checks that totals stay inside the safe integer range, and reads the limit from a versioned rule rather than a number written into the code. The model may explain the result; it cannot supply or change any input to it.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>// service/src/domain/protection.ts — pure: no I/O, no clock, no model
+export function protectionByGroup(
+  holdings: readonly EligibleHolding[],
+  rule: ProtectionRule,                 // { version, limitPencePerGroup } from versioned config
+): readonly GroupProtection[] {
+  const totals = new Map&lt;string, number&gt;()
+
+  for (const holding of holdings) {
+    const next = (totals.get(holding.bankingGroup) ?? 0) + holding.balancePence
+    if (!Number.isSafeInteger(next)) throw new DomainError("BALANCE_OUT_OF_RANGE")
+    totals.set(holding.bankingGroup, next)
+  }
+
+  return [...totals].map(([bankingGroup, eligiblePence]) =&gt; {
+    const coveredPence = Math.min(eligiblePence, rule.limitPencePerGroup)
+    return { bankingGroup, eligiblePence, coveredPence, uncoveredPence: eligiblePence - coveredPence, ruleVersion: rule.version }
+  })
+}</code></pre></div>
+
+    <p>The verifier is the other half of the same idea. A composed draft comes back as structured output: the text plus a list of claims, each pointing at evidence ids. The verifier pulls every money amount, percentage and date out of the text and requires each to appear in the frozen evidence, requires every claim to cite evidence that exists, and runs Lesson 13's deterministic output scan for other customers' details and advice-line wording. It also requires the draft to cite at least one evidence id, and every cited id to exist in the bundle. If the model's one capability request carries malformed arguments, Lesson 47's bounded correction loop applies: the validation error goes back once, the corrected request is validated again, and a second failure drops the turn a step instead of retrying forever.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>export function verifyDraft(draft: Draft, evidence: EvidenceBundle): Verification {
+  const problems: string[] = []
+
+  if (draft.citedEvidenceIds.length === 0) problems.push("no cited evidence")
+  for (const id of draft.citedEvidenceIds) if (!evidence.ids.has(id)) problems.push(`cited id not in bundle: ${id}`)
+  for (const figure of extractFigures(draft.text)) {            // "£1,250.00", "4.10%", "14 March 2027"
+    if (!evidence.figures.has(figure.normalised)) problems.push(`figure not in evidence: ${figure.raw}`)
+  }
+  for (const claim of draft.claims) {
+    if (claim.evidenceIds.length === 0) problems.push(`uncited claim: ${claim.id}`)
+    for (const id of claim.evidenceIds) if (!evidence.ids.has(id)) problems.push(`unknown evidence id: ${id}`)
+  }
+  if (namesSomeoneOutsideScope(draft.text, evidence.scope)) problems.push("mentions another customer")
+  if (crossesAdviceLine(draft.text)) problems.push("personal recommendation")
+
+  return problems.length === 0 ? { ok: true } : { ok: false, problems }
+}</code></pre></div>
+
+    <blockquote>Never ask the model to calculate a financial figure that ordinary code can calculate exactly. Let code gather the evidence, let the model ask for at most one more piece through the same typed interface and explain it, and use code to check that the explanation only repeats what the evidence says.</blockquote>
+
+    <div class="finding"><b>Capability contract:</b> validate on both sides. Input validation protects the service from the model; output validation catches a broken store before its malformed result becomes persuasive prose; evidence ids let the verifier, the client and a reviewer all point at the same facts.</div>
+  </article>
+
+  <article class="capstone-section" id="capstone-mcp">
+    <h3>An optional MCP server shares guidance and the catalogue, never the customer</h3>
+    <div class="problem"><b>The problem:</b> other internal assistants want the same approved guidance and product facts. Copying the capability code into each one causes contract drift, while giving each one direct store access widens the attack surface. Skill Reporter has the same integration drift unless shared contracts and narrow gateways are enforced.</div>
+
+    <p>A Model Context Protocol (MCP) server lets other approved hosts discover and call capabilities through a standard contract. Eunomia's MCP server is optional, read-only, and exposes only <code class="inline">lookupGuidance</code> and <code class="inline">queryCatalogue</code>. Both return facts that are the same for every customer. <code class="inline">readSnapshot</code> is never exposed: customer holdings stay behind the authenticated <code class="inline">/v1/turns</code> route, where scope comes from a customer token. Hosts that call the MCP server authenticate as approved service identities. This selective design matters more than adopting the protocol everywhere.</p>
+
+    <p>Lesson 6 becomes the server boundary, Lesson 23 becomes discovery at startup by the hosts that consume this server, and Lesson 48 describes how such a calling host turns the advertised schemas into local tool definitions at runtime. Lesson 33's server-side dynamic tool synthesis and runtime registration is deliberately not used in the first release: the server registers its two tools once, at startup, from reviewed code, so the advertised contract changes only through a gated release. Lesson 32's resource subscriptions (change notifications from the server) can tell a host that the catalogue version changed, but a turn pins the catalogue version in its evidence bundle, so facts do not shift halfway through one answer.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 330" role="img" aria-label="Optional read-only MCP server for Eunomia">
+        <defs><marker id="ah10c" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <path fill="none" d="M 210 100 L 330 100" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah10c)"/>
+        <path fill="none" d="M 210 235 L 330 235" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah10c)"/>
+        <path fill="none" d="M 560 100 L 690 75" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah10c)"/>
+        <path fill="none" d="M 560 100 L 690 160" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah10c)"/>
+        <path fill="none" d="M 560 235 L 690 240" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah10c)"/>
+
+        <rect x="35" y="60" width="175" height="80" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="122" y="90" fill="white" font-size="12" font-weight="600" text-anchor="middle">Other approved host</text><text x="122" y="112" fill="#94a3b8" font-size="9" text-anchor="middle">service identity · discovers tools</text>
+        <rect x="35" y="195" width="175" height="80" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="122" y="225" fill="white" font-size="12" font-weight="600" text-anchor="middle">Eunomia web client</text><text x="122" y="247" fill="#94a3b8" font-size="9" text-anchor="middle">customer token</text>
+
+        <rect x="330" y="55" width="230" height="90" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="445" y="84" fill="white" font-size="12" font-weight="600" text-anchor="middle">MCP server (optional)</text><text x="445" y="106" fill="#94a3b8" font-size="9" text-anchor="middle">lookupGuidance · queryCatalogue</text><text x="445" y="121" fill="#94a3b8" font-size="9" text-anchor="middle">read-only · same Zod schemas</text>
+        <rect x="330" y="190" width="230" height="90" rx="8" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="445" y="219" fill="white" font-size="12" font-weight="600" text-anchor="middle">POST /v1/turns</text><text x="445" y="241" fill="#94a3b8" font-size="9" text-anchor="middle">readSnapshot runs only here</text><text x="445" y="256" fill="#94a3b8" font-size="9" text-anchor="middle">scope from the customer token</text>
+
+        <rect x="690" y="35" width="270" height="80" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="825" y="65" fill="white" font-size="12" font-weight="600" text-anchor="middle">GuidanceStore</text><text x="825" y="87" fill="#94a3b8" font-size="9" text-anchor="middle">approved passages · stable passage ids</text>
+        <rect x="690" y="125" width="270" height="70" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="825" y="153" fill="white" font-size="12" font-weight="600" text-anchor="middle">Catalogue</text><text x="825" y="175" fill="#94a3b8" font-size="9" text-anchor="middle">versioned product facts</text>
+        <rect x="690" y="205" width="270" height="70" rx="8" fill="rgba(136,19,55,0.25)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="825" y="233" fill="white" font-size="12" font-weight="600" text-anchor="middle">AccountReader</text><text x="825" y="255" fill="#94a3b8" font-size="9" text-anchor="middle">never reachable over MCP</text>
+      </svg>
+      <p class="diagram-caption">SHARE THE SAME-FOR-EVERYONE FACTS OVER MCP; KEEP THE CUSTOMER SNAPSHOT BEHIND THE TOKEN</p>
+    </div>
+
+    <p>The server reuses the exact Zod shapes from the capability declarations, so the MCP contract and the in-service contract cannot drift apart. It is a second adapter onto the same ports, not a second implementation.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { capabilities, CatalogueFilter, GuidanceQuery, runLookupGuidance, runQueryCatalogue } from "../../capabilities"   // the same reviewed implementations the evidence planner calls
+import type { Catalogue, GuidanceStore } from "../../ports"
+
+export function buildGuidanceMcpServer(ports: { guidance: GuidanceStore; catalogue: Catalogue }) {
+  const server = new McpServer({ name: "eunomia-guidance", version: "1.0.0" })
+
+  server.registerTool(
+    "lookupGuidance",
+    { description: "Approved savings guidance passages with stable passage ids.", inputSchema: GuidanceQuery.shape },
+    async (args, extra) =&gt; {
+      const input = capabilities.lookupGuidance.input.parse(args)
+      const output = capabilities.lookupGuidance.output.parse(await runLookupGuidance(input, ports, extra.signal))   // a cancelled MCP request cancels the lookup
+      return { content: [{ type: "text", text: JSON.stringify(output) }] }
+    },
+  )
+
+  server.registerTool(
+    "queryCatalogue",
+    { description: "Products in the approved catalogue matching a filter.", inputSchema: CatalogueFilter.shape },
+    async (args, extra) =&gt; {
+      const input = capabilities.queryCatalogue.input.parse(args)     // includes the min/max term refinement
+      const output = capabilities.queryCatalogue.output.parse(await runQueryCatalogue(input, ports, extra.signal))
+      return { content: [{ type: "text", text: JSON.stringify(output) }] }
+    },
+  )
+
+  return server   // readSnapshot is deliberately absent
+}</code></pre></div>
+
+    <div class="capstone-tie"><b>Capstone decision:</b> MCP is an interoperability boundary, not a shortcut around authorization. Every exposed capability calls the same reviewed implementation with the same input and output schema checks as inside the service, as the sample shows, and nothing customer-specific is on it. Timeouts and traces are added by the adapter around each handler, as the HTTP adapter does for its routes; that wrapper is not shown here. The same rule applies to Eunomia and Skill Reporter integrations.</div>
+  </article>
+
+  <article class="capstone-section" id="capstone-frontend">
+    <h3>The Next.js client renders typed turn events and shows its evidence</h3>
+    <div class="problem"><b>The problem:</b> a chat page must reconcile acceptance, evidence, paced text, a final answer, a handoff, errors and dropped connections without ever making a half-finished turn look like a complete financial answer. Hand-built string handling drifts from what the server really sends. Skill Reporter needs the same typed event discipline for long-running report generation.</div>
+
+    <p>The client in <code class="inline">web/</code> is a Next.js (React web framework) application. A server-side route in the client forwards the signed-in session's token to <code class="inline">POST /v1/turns</code> and passes the event stream back unchanged; it never adds a customer id of its own. In the browser, a small reader splits the stream into frames, parses each one with the published <code class="inline">TurnEvent</code> contract, and feeds it to a <span class="jargon">reducer</span> (a function that takes the current screen state plus one event and returns the next state). Unknown or malformed events are dropped and counted, not displayed.</p>
+
+    <p>This is Lesson 53's error-aware event contract on the receiving side. Lesson 38's typed multimodal-event principle matters before Eunomia ever accepts images or files: every kind of content gets its own event type rather than a string with a magic prefix. And because <code class="inline">answer.delta</code> is paced verified text rather than live generation, the client never has to retract words, which Lesson 3's raw token stream would have made possible.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>"use client"
+import { TurnEvent } from "@eunomia/turn-contract"   // the contracts/turn/ workspace package; the service sends with the same schema
+
+export const droppedEvents = { count: 0 }   // malformed frames are dropped and counted, never shown
+
+export async function* readTurnEvents(response: Response): AsyncGenerator&lt;TurnEvent&gt; {
+  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer = ""
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) return
+    buffer += value
+    let end: number
+    while ((end = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, end)
+      buffer = buffer.slice(end + 2)
+      const data = frame.split("\n").filter((l) =&gt; l.startsWith("data: ")).map((l) =&gt; l.slice(6)).join("\n")
+      if (!data) continue
+      let parsed: ReturnType&lt;typeof TurnEvent.safeParse&gt; | null = null
+      try { parsed = TurnEvent.safeParse(JSON.parse(data)) } catch { parsed = null }
+      if (parsed?.success) yield parsed.data
+      else droppedEvents.count += 1
+    }
+  }
+}
+
+export function turnReducer(state: TurnView, event: TurnEvent): TurnView {
+  switch (event.type) {
+    case "turn.accepted":   return { ...state, turnId: event.turnId, status: "working" }
+    case "evidence.ready":  return { ...state, evidenceIds: event.evidenceIds }
+    case "answer.delta":    return event.seq === state.nextSeq
+                              ? { ...state, draft: state.draft + event.text, nextSeq: state.nextSeq + 1 }
+                              : state
+    case "answer.final":    return { ...state, status: "answered", text: event.text, cited: event.citedEvidenceIds }
+    case "turn.declined":   return { ...state, status: "declined", text: event.reason }
+    case "handoff.offered": return { ...state, status: "handed-off", ticket: event.reviewTicket }
+    case "turn.failed":     return { ...state, status: "failed", retryable: event.retryable }
+  }
+}</code></pre></div>
+
+    <p>If the stream closes while the state is still <code class="inline">working</code>, the page shows "this answer did not finish" and offers a retry with the same conversation id; it never promotes the partial draft to an answer. Under each finished answer, a "Where this came from" panel calls <code class="inline">GET /v1/turns/{id}/evidence</code> and lists the snapshot date, catalogue version and guidance passages behind it, and an "Ask a person to check" button calls <code class="inline">POST /v1/turns/{id}/review</code>. The browser is never trusted to calculate balances or protection; it only displays figures that came back in verified events.</p>
+
+    <div class="finding"><b>Event rule:</b> turn events are part of the product contract. Version them, test them from outside, and make the ending explicit; a dropped connection must never look like a complete financial answer.</div>
+  </article>
+
+  <article class="capstone-section" id="capstone-e2e">
+    <h3>An independent Python probe suite proves the contract from outside</h3>
+    <div class="problem"><b>The problem:</b> tests that run inside the service can inherit the same wrong assumptions as the service, and mocks keep passing after the real HTTP contract breaks. Skill Reporter has the same blind spot without an independent client that only sees what a real caller sees.</div>
+
+    <p>Eunomia's <code class="inline">probes/</code> folder is a separate Python suite. A <span class="jargon">contract probe</span> (a test that checks a promise the public API makes, such as "every turn ends with exactly one ending event", by calling it the way a real client would) talks to any running environment over HTTP only, chosen by a base URL and a test credential. It shares no code with the service: not the Zod schemas, not the fixtures, not a helper. The <b>client</b> holds only public HTTP calls and its own reading of the wire contract; <b>fixtures</b> name which test customer signs in; the <b>tests</b> state user-visible promises. A <b>stub upstream</b> (a controllable stand-in for the account, catalogue and guidance stores and for the model providers, which counts every call it receives) can inject latency, errors and malformed payloads on request.</p>
+
+    <p>A different language makes accidental imports impossible, but language alone does not prove independence. The suite is independent because it uses only public contracts, its own fixtures, and observable behaviour. This applies Lesson 26's principle of verifying the real running system from outside (there through a browser, here through HTTP calls), and Lesson 24's process orchestration is how CI starts the service, the stub and the probes in the right order and waits for <code class="inline">/readyz</code> before the first probe runs.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 350" role="img" aria-label="Independent Python contract probe suite">
+        <defs><marker id="ah10d" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="35" width="360" height="280" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.4" stroke-dasharray="8,4"/>
+        <text x="45" y="62" fill="#fbbf24" font-size="11">probes/ — SEPARATE PYTHON SUITE</text>
+        <path fill="none" d="M 190 122 L 190 165" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah10d)"/>
+        <path fill="none" d="M 190 225 L 190 266" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah10d)"/>
+        <path fill="none" d="M 310 288 L 410 288 L 410 195 L 470 195" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#ah10d)"/>
+        <path fill="none" d="M 670 195 L 760 195" stroke="#34d399" stroke-width="1.8" marker-end="url(#ah10d)"/>
+        <path fill="none" d="M 310 100 L 740 100 L 740 40 L 758 40" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah10d)"/>
+        <path fill="none" d="M 865 70 L 865 158" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah10d)"/>
+
+        <rect x="70" y="78" width="240" height="44" rx="7" fill="rgba(120,53,15,0.3)" stroke="#fbbf24"/><text x="190" y="105" fill="white" font-size="11" text-anchor="middle">tests: public promises</text>
+        <rect x="70" y="165" width="240" height="60" rx="7" fill="rgba(120,53,15,0.3)" stroke="#fbbf24"/><text x="190" y="190" fill="white" font-size="11" text-anchor="middle">fixtures + runner</text><text x="190" y="208" fill="#94a3b8" font-size="9" text-anchor="middle">base URL · test customer · stub faults</text>
+        <rect x="70" y="266" width="240" height="44" rx="7" fill="rgba(30,41,59,0.5)" stroke="#94a3b8"/><text x="190" y="293" fill="white" font-size="11" text-anchor="middle">HTTP client (public routes only)</text>
+
+        <rect x="470" y="150" width="200" height="90" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="570" y="180" fill="white" font-size="12" font-weight="600" text-anchor="middle">Any running environment</text><text x="570" y="202" fill="#94a3b8" font-size="9" text-anchor="middle">real token checks · real routes</text><text x="570" y="218" fill="#94a3b8" font-size="9" text-anchor="middle">real event stream</text>
+        <rect x="760" y="10" width="210" height="60" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="865" y="36" fill="white" font-size="11" font-weight="600" text-anchor="middle">fault controls</text><text x="865" y="54" fill="#94a3b8" font-size="9" text-anchor="middle">set per test, reset after</text>
+        <rect x="760" y="160" width="210" height="80" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="865" y="188" fill="white" font-size="12" font-weight="600" text-anchor="middle">Stub upstream</text><text x="865" y="210" fill="#94a3b8" font-size="9" text-anchor="middle">latency · errors · malformed payloads</text><text x="865" y="225" fill="#94a3b8" font-size="9" text-anchor="middle">counts every call it receives</text>
+      </svg>
+      <p class="diagram-caption">THE PROBES TALK TO A RUNNING ENVIRONMENT OVER HTTP; THEY SHARE NO SERVICE CODE</p>
+    </div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import unittest
+
+from probes.client import ProbeClient
+from probes.stub import stub_faults
+
+ENDING_EVENTS = {"answer.final", "turn.declined", "handoff.offered", "turn.failed"}
+
+
+class TurnContractProbes(unittest.TestCase):
+    def setUp(self) -&gt; None:
+        self.client = ProbeClient.signed_in_as("fixture-customer-a")
+
+    def test_body_cannot_widen_customer_scope(self) -&gt; None:
+        response = self.client.post_json("/v1/turns", {
+            "message": "Show my balances",
+            "customerId": "fixture-customer-b",
+        })
+        self.assertEqual(response.status, 400)
+
+    def test_slow_catalogue_still_ends_with_exactly_one_ending_event(self) -&gt; None:
+        with stub_faults(catalogue={"latency_ms": 4_000}):
+            events = self.client.stream_turn("Which fixed-term products pay at least 4%?")
+
+        types = [event["type"] for event in events]
+        self.assertEqual(types[0], "turn.accepted")
+        self.assertEqual(sum(t in ENDING_EVENTS for t in types), 1)
+        self.assertIn(types[-1], ENDING_EVENTS)
+
+    def test_malformed_snapshot_never_reaches_the_answer(self) -&gt; None:
+        with stub_faults(accounts={"payload": "malformed"}) as stub:
+            events = self.client.stream_turn("How much of my savings is protected?")
+            model_calls = stub.model_calls      # read before the stub resets on exit
+
+        self.assertNotIn("answer.final", [event["type"] for event in events])
+        self.assertEqual(model_calls, 0)</code></pre></div>
+
+    <p>The same suite probes token checks, the evidence route for a turn owned by someone else (it must be a 404, not a 403 that confirms the turn exists), a provider outage that should end in <code class="inline">handoff.offered</code>, <code class="inline">/readyz</code> turning unready when every store is down, and event ordering under a dropped connection. It asserts observable behaviour, never internal function names. Because the stub counts calls, a refused or malformed turn can prove that no model was touched.</p>
+
+    <div class="finding"><b>Independence test:</b> if the probes cannot run against an already-deployed Eunomia environment by changing only the base URL and the test credential, they are too coupled to the local implementation.</div>
+  </article>
+
+  <article class="capstone-section" id="capstone-evals">
+    <h3>quality/ turns answer quality into versioned, pinned evidence</h3>
+    <div class="problem"><b>The problem:</b> unit tests prove that a schema rejects bad input; probes prove that the HTTP contract holds. Neither proves that an answer after a prompt or model change still shows the right figure, cites the right passage, stays on the right side of the advice line, and reads clearly. Skill Reporter needs the same layer to catch quality regressions that types and contracts miss.</div>
+
+    <p><code class="inline">quality/</code> holds scenario files grouped by risk: <b>money facts</b>, <b>the advice line</b>, <b>privacy</b>, <b>injection</b> and <b>tone</b>. Each scenario is a list of checkable properties (shows this figure, cites a passage, never names another customer, declines advice) plus any rubrics (written scoring rules) that a judge model applies. Properties are checked by code first because they are cheap and exact; rubric judges run after, and a judge is allowed to gate a release only once its scores agree well enough with human labels on a calibration set. Every run writes a <span class="jargon">run manifest</span> (a small file that pins exactly what was tested): model, provider chain, and the hashes of the prompt, templates, routing policy, capability schemas and scenario set.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="yaml"><code># quality/scenarios/money-facts/two-brands-one-group.yaml
+id: money-facts.two-brands-one-group
+risk: money-facts
+fixture: two-brands-same-banking-group     # restored by the snapshot step
+signedInAs: fixture-customer-a
+turn: "Am I fully protected if I keep both accounts?"
+properties:
+  - shows-figure: { from: snapshot.protection[0].uncoveredPence, as: pounds }
+  - cites: snapshot
+  - mentions: "same banking group"
+  - never-names-other-customer: true
+  - ends-with: answer.final
+rubrics: [plain-english-for-a-non-expert]
+---
+# quality/manifests/run-2026-11-20T04-12.yaml (written by the harness, never by hand)
+model: provider-a/compose-large@2026-09
+providerChain: [provider-a/compose-large@2026-09, provider-b/compose-medium@2026-07]
+providerChainHash: sha256:0b7c…3d
+promptHash: sha256:3f9c…a1
+templatesHash: sha256:9e41…07
+capabilitySchemaHash: sha256:77d0…4e
+scenarioSetHash: sha256:c21b…90
+routingPolicyHash: sha256:5ab8…12
+judges: { plain-english-for-a-non-expert: judge-v4 (calibrated 2026-11-02) }</code></pre></div>
+
+    <p>The harness loop has four steps. <b>Snapshot:</b> restore the scenario's fixture state in the stores, so every run starts from the same known world. <b>Replay:</b> run the turn through the real HTTP surface, exactly as a client would. <b>Assert:</b> check properties against the turn and its evidence bundle, then run the calibrated rubric judges. <b>Archive:</b> store the evidence bundle, events, verdicts and manifest id together, so any failure can be reopened later. Then a deterministic hash decides which passes also go to the review inbox; every failure always goes.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { createHash } from "node:crypto"
+
+export async function runScenario(scenario: Scenario, run: RunContext): Promise&lt;ScenarioResult&gt; {
+  await run.fixtures.restore(scenario.fixture)                                       // 1. snapshot
+  const turn = await run.client.streamTurn(scenario.turn, { as: scenario.signedInAs }) // 2. replay (real HTTP)
+  const evidence = await run.client.evidenceFor(turn.turnId)
+
+  const properties = scenario.properties.map((p) =&gt; checkProperty(p, turn, evidence)) // 3. assert, exact first
+  const rubrics = await run.judges.score(scenario.rubrics, turn, evidence)
+  const result = { scenarioId: scenario.id, manifestId: run.manifest.id, turn, evidence, properties, rubrics }
+
+  await run.archive.store(result)                                                    // 4. archive
+  if (!passed(result) || sampledForReview(run.manifest.id, scenario.id, run.reviewShare)) {
+    await run.reviewInbox.submit({ kind: "quality-run", turnId: turn.turnId, evidenceId: evidence.id, manifestId: run.manifest.id })
+  }
+  return result
+}
+
+/** Same manifest + scenario always lands on the same side of the line, so reviewers see a stable sample. */
+export function sampledForReview(manifestId: string, scenarioId: string, share: number): boolean {
+  const digest = createHash("sha256").update(`${manifestId}:${scenarioId}`).digest()
+  return digest.readUInt32BE(0) / 0x1_0000_0000 &lt; share
+}</code></pre></div>
+
+    <p>Lessons 10 and 19 supply evaluation-driven development and judge calibration against human-labelled examples; reviewers' labels from the inbox feed that calibration set. Lesson 55's deterministic sampling is the hash above: re-running the same manifest picks the same passes, so two people reviewing "the sample" are looking at the same turns. A strong production turn can become a new scenario only after redaction, deduplication and a person's approval; a run's manifest can become the new approved baseline only after the gate passes (Lesson 56's last-approved baseline rule) and then only after a window of consecutive passing runs on <code class="inline">main</code> (Lesson 57).</p>
+
+    <div class="finding"><b>Evaluation rule:</b> never let the same uncalibrated model write the answer, judge the answer, and approve its own release without independent human labels. That is one opinion wearing three badges.</div>
+  </article>
+
+  <article class="capstone-section" id="capstone-cicd">
+    <h3>Continuous integration blocks quality regressions, not just build failures</h3>
+    <div class="problem"><b>The problem:</b> a change can compile, pass unit tests and pass every probe while still dropping a figure, weakening the advice line, or making answers harder to read. Ordinary CI stays green through that. Skill Reporter has the same release risk without a quality gate tied to promotion.</div>
+
+    <p>The pipeline on GitHub Actions has four stages. <b>Checks:</b> lint (static code-quality checks), types, unit tests and build. <b>Probes:</b> start the built service and the stub upstream, wait for <code class="inline">/readyz</code>, run the Python suite. <b>Quality gate:</b> on a pull request, pick scenario groups from the paths changed against <code class="inline">origin/&lt;base branch&gt;</code>, using full git history (a style-only change in <code class="inline">web/</code> runs none; a change to the prompt, routing table, templates, capabilities or provider chain runs the groups that depend on it; any change to <code class="inline">domain/</code> runs money facts); on a push to <code class="inline">main</code>, run the full scenario set with no path filtering. Then compare against the last approved manifest. <b>Production:</b> a protected environment with a required reviewer.</p>
+
+    <p>This is Lesson 25's eval gate made selective, Lesson 30's shared pipeline across one repository, and Lesson 56's approved-baseline comparison. The required reviewer applies the broad human-oversight principle from Lessons 12 and 39, but it is not their durable per-action checkpoint; write actions, which would need that, are deferred.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 330" role="img" aria-label="Quality-gated CI and deployment flow">
+        <defs><marker id="ah10e" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <path fill="none" d="M 150 110 L 190 110 M 330 110 L 370 110 M 510 110 L 550 110 M 690 110 L 730 110 M 870 110 L 905 110" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah10e)"/>
+        <path fill="none" d="M 800 150 L 800 220" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah10e)"/>
+        <path fill="none" d="M 942 150 L 942 185 L 590 185 L 590 220" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah10e)"/>
+
+        <rect x="20" y="75" width="130" height="70" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8"/><text x="85" y="103" fill="white" font-size="11" font-weight="600" text-anchor="middle">Push / PR</text><text x="85" y="124" fill="#94a3b8" font-size="9" text-anchor="middle">changed paths</text>
+        <rect x="190" y="75" width="140" height="70" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399"/><text x="260" y="103" fill="white" font-size="11" font-weight="600" text-anchor="middle">Checks</text><text x="260" y="124" fill="#94a3b8" font-size="9" text-anchor="middle">lint · types · unit · build</text>
+        <rect x="370" y="75" width="140" height="70" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24"/><text x="440" y="103" fill="white" font-size="11" font-weight="600" text-anchor="middle">Probes</text><text x="440" y="124" fill="#94a3b8" font-size="9" text-anchor="middle">Python · HTTP · stub</text>
+        <rect x="550" y="75" width="140" height="70" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa"/><text x="620" y="103" fill="white" font-size="11" font-weight="600" text-anchor="middle">Select scenarios</text><text x="620" y="124" fill="#94a3b8" font-size="9" text-anchor="middle">changed paths (PR) · all (main)</text>
+        <rect x="730" y="75" width="140" height="70" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185"/><text x="800" y="103" fill="white" font-size="11" font-weight="600" text-anchor="middle">Quality gate</text><text x="800" y="124" fill="#94a3b8" font-size="9" text-anchor="middle">floors + regression</text>
+        <rect x="905" y="75" width="75" height="70" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399"/><text x="942" y="103" fill="white" font-size="11" font-weight="600" text-anchor="middle">Merge</text><text x="942" y="124" fill="#94a3b8" font-size="8" text-anchor="middle">allowed</text>
+
+        <rect x="720" y="220" width="160" height="60" rx="8" fill="rgba(136,19,55,0.3)" stroke="#fb7185"/><text x="800" y="246" fill="white" font-size="11" text-anchor="middle">Publish gate report</text><text x="800" y="264" fill="#94a3b8" font-size="9" text-anchor="middle">block merge</text>
+        <rect x="490" y="220" width="200" height="60" rx="8" fill="rgba(6,78,59,0.35)" stroke="#34d399"/><text x="590" y="246" fill="white" font-size="11" text-anchor="middle">production (protected)</text><text x="590" y="264" fill="#94a3b8" font-size="9" text-anchor="middle">required reviewer · record candidate</text>
+      </svg>
+      <p class="diagram-caption">CHECKS → PROBES → QUALITY GATE (PATH-SELECTED ON PRS, FULL ON MAIN) → PROTECTED PRODUCTION WITH A REQUIRED REVIEWER</p>
+    </div>
+
+    <p>Branch protection makes the workflow a required status check, so a pull request cannot merge unless it succeeds; that rule lives in the repository settings, outside the YAML. The <code class="inline">production</code> environment has a required reviewer, so a named person must approve before the deploy job starts, and the same approval records the run's manifest as a <b>candidate</b>. The approved baseline in <code class="inline">quality/manifests/approved.yaml</code> moves to that candidate only after a window of consecutive passing runs on <code class="inline">main</code> (Lesson 57); one approval never moves it on its own. When the window is met, <code class="inline">quality:promote</code> opens a pull request under a bot identity that updates <code class="inline">approved.yaml</code>, so the baseline moves only through that reviewed change, merged like any other.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="yaml"><code>on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npm run lint &amp;&amp; npm run typecheck &amp;&amp; npm test &amp;&amp; npm run build
+
+  probes:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci &amp;&amp; npm run build
+      - run: ./scripts/start-probe-env.sh     # service + stub upstream, waits for /readyz
+      - run: python3 -m unittest discover -s probes/tests -t probes
+        env:
+          PROBE_BASE_URL: http://localhost:8080
+          PROBE_CREDENTIAL: ${{ secrets.PROBE_TEST_CREDENTIAL }}   # a test customer's credential, never a real one
+
+  quality:
+    needs: probes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: npm ci &amp;&amp; npm run build
+      - run: ./scripts/start-probe-env.sh     # the real HTTP surface the scenarios replay through
+      - name: Select scenarios
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            npm run quality:select -- --base "origin/${{ github.base_ref }}" --out artifacts/selected.json
+          else
+            npm run quality:select -- --all --out artifacts/selected.json    # push to main: full set, no path filtering
+          fi
+      - run: npm run quality:run -- --selection artifacts/selected.json --manifest-out artifacts/manifest.yaml
+      - run: npm run quality:gate -- --against quality/manifests/approved.yaml --report artifacts/gate.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-gate-report
+          path: artifacts/
+
+  deploy:
+    needs: quality
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.QUALITY_BOT_TOKEN }}   # a bot identity; a pull request opened with the default token would not trigger the required checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: quality-gate-report, path: artifacts/ }
+      - run: npm ci
+      - run: ./scripts/deploy.sh
+      - run: npm run quality:candidate -- --manifest artifacts/manifest.yaml   # the approval records a candidate in the run archive, not the baseline
+      - run: npm run quality:promote -- --window 5 --open-pull-request    # after 5 consecutive passing runs on main, opens a PR that updates approved.yaml</code></pre></div>
+
+    <p>The gate checks two things per risk group. A <b>floor</b> is an absolute minimum pass rate; an <b>allowed regression</b> is the most the pass rate may fall below the last approved manifest. A tone pass rate of 0.93 may clear its floor of 0.90 and still block if the approved run reached 0.97 and the allowed regression is 0.02. Money facts, privacy and the advice line are zero-tolerance groups: one wrong figure, one other customer named, or one personal recommendation blocks the change whatever the average says. Promotion follows Lesson 57: the approved manifest only moves after a window of consecutive passing runs on <code class="inline">main</code>, never after one lucky pass, and then only when the promotion pull request that updates <code class="inline">approved.yaml</code> is reviewed and merged.</p>
+
+    <div class="finding"><b>Delivery rule:</b> the baseline is an approved manifest, never "whatever main produced most recently". A failed run cannot lower the bar for the next one.</div>
+  </article>
+
+  <article class="capstone-section" id="capstone-repository">
+    <h3>The repository shape makes ownership visible</h3>
+    <p>A production-shaped design can still be easy to read. The tree below is the capstone's own layout; its implementation is not part of this book's repository. Folder names follow the boundaries in this chapter: the domain and ports in the middle of the service, adapters at its edge, and the quality suite, probes, client and shared turn contract beside it. The <span class="jargon">composition root</span> (<code class="inline">main.ts</code>, the one place where real adapters are plugged into the ports at startup) is the only file that knows about everything.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="text"><code>eunomia/
+├── service/
+│   ├── src/
+│   │   ├── domain/           # protection per banking group, product facts, pence, routing policy table, verifier rules
+│   │   ├── ports/            # AccountReader, Catalogue, GuidanceStore, TurnStore, ModelGateway, TraceSink, ReviewInbox
+│   │   ├── capabilities/     # readSnapshot, queryCatalogue, lookupGuidance (Zod in and out), one-correction loop
+│   │   ├── answering/        # turn runner, evidence planner, sequence runner, templates, compose requests
+│   │   ├── adapters/
+│   │   │   ├── http/         # /v1/turns, evidence, review, /livez, /readyz, event stream
+│   │   │   ├── models/       # provider adapters, fallback chain, circuit breaker, budget
+│   │   │   ├── stores/       # accounts, catalogue, guidance, turns + evidence bundles, review inbox
+│   │   │   ├── telemetry/    # TraceSink with export-path masking
+│   │   │   └── mcp/          # optional read-only MCP server
+│   │   └── main.ts           # composition root
+│   └── test/                 # unit tests for domain/ and answering/
+├── quality/
+│   ├── scenarios/            # money-facts/ advice-line/ privacy/ injection/ tone/
+│   ├── rubrics/              # judge rubrics + calibration labels
+│   ├── manifests/            # run manifests; approved.yaml is the baseline, changed only by a reviewed promotion PR
+│   └── gate/                 # selection by path, floors, allowed regression
+├── contracts/
+│   └── turn/                 # TurnEvent Zod schema, published as @eunomia/turn-contract; service and web/ both import it
+├── probes/                   # independent Python contract probes + stub upstream
+├── web/                      # Next.js client
+├── scripts/                  # local bootstrap, probe environment, deploy
+└── .github/workflows/        # checks, probes, quality, deploy</code></pre></div>
+
+    <p>Lesson 30 explains why this is one coordinated repository: the event contract in <code class="inline">contracts/turn/</code>, the scenarios that depend on it, and the client that reads it change in one pull request. Lesson 24 explains how the probe environment starts reproducibly. Lesson 47's bounded correction loop belongs at runtime, inside <code class="inline">capabilities/</code>: it repairs malformed arguments within a strict limit. It does not let any script or the running assistant edit application code; that separate code-repair theme is Lesson 27, and it stays outside the serving path.</p>
+
+    <p>Earlier Python and TypeScript examples were teaching ports of the same ideas. The serving implementation is deliberately TypeScript for both service and client; Python appears only in <code class="inline">probes/</code>, as an outside test runtime, and is not a hidden production dependency.</p>
+
+    <blockquote>Do not mistake a monorepo for a monolith. Eunomia keeps one source tree so contracts change together, while dependency direction and trust boundaries stay explicit.</blockquote>
+  </article>
+
+  <article class="capstone-section" id="capstone-release">
+    <h3>What ships in the first production-shaped release</h3>
+    <p>The first release is read-only. It includes the five routes with token-derived scope; typed turn events with an explicit ending; three Zod-declared capabilities that return evidence ids; deposit protection per banking group computed in pence by domain code; the routing policy table and the template, composed and handoff sequence; a verifier that checks every figure and claim against frozen evidence; a model gateway with a fallback chain, circuit breakers and a per-turn budget; masked tracing through the TraceSink; an evidence route and a review route; an optional read-only MCP server for guidance and the catalogue; risk-grouped scenarios with calibrated judges, run manifests and hash-sampled review; independent Python probes; and a quality gate in front of a protected production environment. The snippets in this chapter show the ports, the turn route and event contract, the sequence, the gateway, the capabilities, the protection rule, the verifier, the MCP adapter, the client reader, a probe, the scenario and harness, and the pipeline. Store adapters, template wording, the review inbox's own screens, and rollback operations are named boundaries rather than full examples here. Write actions (moving money, opening, closing or changing accounts) are deferred to a later release with its own per-action approval design.</p>
+
+    <p>The operating loop is concrete. Every answer carries a turn id and a trace id, and its evidence can be fetched again. A customer (through the review route), the sequence runner (at the last step, or when the routing table hands off), the input screen (for advice requests) and the quality harness's sampler can each send a turn to the review inbox. A reviewer's label can become calibration data, and an approved, redacted turn can become a new scenario. A required status check runs the affected scenario groups, compares them with the approved manifest, and blocks a material regression. Production promotion passes a required reviewer and records the manifest as a candidate; the approved baseline moves to it only after a window of consecutive passing runs on <code class="inline">main</code>, so an operator always knows exactly which model, prompt and schemas to return to. That closes the path from Lesson 1's first schema to Lesson 57's rule of promoting only after a window of consecutive passing runs.</p>
+
+    <div class="capstone-tie"><b>The finished system:</b> Eunomia is useful because the model can read a customer's question, ask for one more piece of evidence when the planned bundle falls short, and explain holdings, products and guidance in plain words. It is trustworthy because identity, schemas, pence arithmetic, the routing table, frozen evidence, the verifier, traces, independent probes, human review and the release gate surround that reasoning at every boundary. Skill Reporter ships under the same boundary model: the capabilities are domain-specific, but the safety and verification controls are shared.</div>
+
+    <div class="finding"><b>The capstone lesson:</b> production AI architecture is not a larger prompt. It is a chain of small, inspectable contracts that lets a probabilistic model contribute where judgement helps, while ordinary software stays in charge of identity, money, evidence and release.</div>
+  </article>
+
+</section>

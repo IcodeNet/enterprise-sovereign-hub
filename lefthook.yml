@@ -1,0 +1,13 @@
+pre-commit:
+  parallel: false
+  commands:
+    format:
+      root: apps/web
+      glob: "apps/web/**/*.{ts,tsx,js,jsx}"
+      run: npx oxfmt --write {staged_files}
+      stage_fixed: true
+    lint:
+      root: apps/web
+      glob: "apps/web/**/*.{ts,tsx,js,jsx}"
+      run: npx oxlint --fix {staged_files}
+      stage_fixed: true

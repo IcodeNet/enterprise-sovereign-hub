@@ -1,0 +1,493 @@
+<section class="part" id="part-2">
+  <div class="part-header">
+    <div class="part-eyebrow">Part II</div>
+    <h2>Giving Agents Tools at Scale (Protocols &amp; Dynamic Tooling)</h2>
+    <p class="part-intro">A tool written inside one agent works until another agent needs it, a team changes it, or live data moves underneath it. This part replaces that brittle arrangement in five steps: put tools behind a standard server, discover them while the agent is running, subscribe to changing resources, register carefully generated tools without a restart, and build input checks from every tool's own description. Read Lessons <a href="#lesson-6">6</a>, <a href="#lesson-23">23</a>, <a href="#lesson-32">32</a>, <a href="#lesson-33">33</a> and <a href="#lesson-48">48</a> in that order: each adds the piece the next one depends on.</p>
+    <div class="reader-note">
+      <p><b>Dual-domain map for this part:</b> every mechanism is shown in the fintech Eunomia implementation and should be mirrored in the Skill Reporter implementation.</p>
+      <ul>
+        <li><b>Fintech domain:</b> balances, savings goals, interest projection, and runtime safety boundaries around customer-impacting tools.</li>
+        <li><b>Skill Reporter domain:</b> skill lookup, report generation, report-ready updates, and runtime safety boundaries around publishing/reporting tools.</li>
+      </ul>
+      <p><b>Interlink chain:</b> Lesson <a href="#lesson-6">6</a> creates shared MCP servers, <a href="#lesson-23">23</a> discovers tools at runtime, <a href="#lesson-32">32</a> pushes live updates, <a href="#lesson-33">33</a> adds sandboxed runtime registration, and <a href="#lesson-48">48</a> validates every call against advertised schemas.</p>
+    </div>
+  </div>
+
+  <!-- LESSON 6 -->
+  <article class="lesson" id="lesson-6">
+    <span class="lesson-tag">Lesson 6</span>
+    <h3>MCP Server Architecture with FastMCP and the TypeScript SDK</h3>
+    <div class="problem"><b>The problem:</b> a balance-checking tool starts life inside one assistant. When a second assistant needs the same capability, copying the function feels harmless, but there are now two implementations to secure, test and keep in step. Add more agents and every fix becomes a synchronisation problem. The Skill Reporter agent hits the same failure mode when skill-lookup and report-formatting functions get copied across assistants.</div>
+
+    <p>The replacement is <span class="jargon">MCP — Model Context Protocol</span> (a published set of rules for how an AI agent asks a separate program what tools it has and then calls one). The functions move into an <span class="jargon">MCP server</span> (the separate program that owns the tools and answers an agent's requests, rather than living inside the agent). Any compliant client can now use one shared implementation, whether that client is written in Python, TypeScript or something else. <span class="jargon">FastMCP</span> (a Python framework for implementing MCP servers) powers the Python examples; the TypeScript examples use the MCP TypeScript SDK.</p>
+
+    <p>Client and server still need a <span class="jargon">transport</span> (the wire that carries their messages). <code class="inline">stdio</code>, standard input/output, pipes text between one client and the server process it launches on the same machine; several clients therefore launch separate processes from the same server implementation. HTTP, Hypertext Transfer Protocol, lets several clients connect over a network to one server process. When a client asks what is available, the server returns a <span class="jargon">tool schema</span> (a machine-readable description, usually expressed as JavaScript Object Notation or JSON, of a tool's name, purpose and required inputs). FastMCP builds that description from the registered Python function, so a function written once becomes both executable code and a discoverable contract.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from fastmcp import FastMCP
+
+mcp = FastMCP("Eunomia")
+
+@mcp.tool
+async def get_balance(account_id: str) -&gt; dict[str, int | str]:
+    """Return the current balance in pence."""
+    return {"account_id": account_id, "balance_pence": 125_00}
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "eunomia", version: "1.0.0" });
+server.registerTool("get_balance", {
+  description: "Return the current balance in pence",
+  inputSchema: { accountId: z.string() },
+}, async ({ accountId }) =&gt; ({
+  content: [{ type: "text", text: JSON.stringify({ accountId, balancePence: 12500 }) }],
+}));
+await server.connect(new StdioServerTransport());</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 340">
+        <defs>
+          <marker id="ah6" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker>
+          <marker id="ah6r" markerWidth="10" markerHeight="7" refX="1" refY="3.5" orient="auto"><polygon points="10 0, 0 3.5, 10 7" fill="#64748b"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <text x="355" y="30" fill="#94a3b8" font-size="10" text-anchor="middle">Shared HTTP server: 1. list tools / 2. call tool</text>
+
+        <rect x="30" y="65" width="180" height="58" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="120" y="99" fill="white" font-size="12" font-weight="600" text-anchor="middle">Agent A (Python)</text>
+        <rect x="30" y="178" width="180" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="120" y="212" fill="white" font-size="12" font-weight="600" text-anchor="middle">Agent B (TypeScript)</text>
+
+        <line x1="210" y1="94" x2="300" y2="130" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah6)"/>
+        <line x1="210" y1="207" x2="300" y2="170" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah6)"/>
+        <rect x="302" y="70" width="170" height="165" rx="8" fill="rgba(30,41,59,0.6)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="387" y="140" fill="white" font-size="12" font-weight="600" text-anchor="middle">MCP Transport</text>
+        <text x="387" y="160" fill="#94a3b8" font-size="10" text-anchor="middle">HTTP</text>
+
+        <line x1="472" y1="125" x2="528" y2="125" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah6)"/>
+        <rect x="530" y="40" width="340" height="225" rx="10" fill="rgba(6,78,59,0.25)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="700" y="67" fill="white" font-size="13" font-weight="600" text-anchor="middle">MCP Server</text>
+
+        <rect x="555" y="82" width="290" height="44" rx="6" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+        <text x="570" y="101" fill="white" font-size="10">tool: get_balance</text><text x="830" y="116" fill="#67e8f9" font-size="8" text-anchor="end">auto-generated schema</text>
+        <rect x="555" y="139" width="290" height="44" rx="6" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+        <text x="570" y="158" fill="white" font-size="10">tool: list_savings_goals</text><text x="830" y="173" fill="#67e8f9" font-size="8" text-anchor="end">auto-generated schema</text>
+        <rect x="555" y="196" width="290" height="44" rx="6" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+        <text x="570" y="215" fill="white" font-size="10">tool: project_interest</text><text x="830" y="230" fill="#67e8f9" font-size="8" text-anchor="end">auto-generated schema</text>
+
+        <line x1="530" y1="190" x2="472" y2="190" stroke="#34d399" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#ah6r)"/>
+        <text x="500" y="181" fill="#34d399" font-size="9" text-anchor="middle">JSON result</text>
+        <path d="M 302 195 Q 255 245 210 215" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#ah6r)"/>
+        <path d="M 302 180 Q 255 125 210 105" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#ah6r)"/>
+        <text x="450" y="312" fill="#94a3b8" font-size="11" text-anchor="middle">HTTP shares one process; stdio gives each client its own process from the same code.</text>
+      </svg>
+      <p class="diagram-caption">TWO HTTP CLIENTS → ONE NETWORK SERVER; STDIO CLIENTS INSTEAD LAUNCH SEPARATE SERVER PROCESSES FROM ONE SHARED IMPLEMENTATION</p>
+    </div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> with the stdio transport, an ordinary debug print to standard output corrupts the protocol's message stream. The client then fails with a confusing parse error that points away from the real cause. Logs must go to standard error instead. The same trap exists in both versions: Python's <code class="inline">print</code> and TypeScript's <code class="inline">console.log</code> are unsafe on that channel.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> this is where <b>Eunomia</b>'s optional MCP server is born, and the Skill Reporter server follows the same shape. Guidance lookup and catalogue queries stay in the service, and the optional MCP server is a second adapter that exposes those same reviewed implementations to other approved hosts, while the customer's own account snapshot never leaves the service; skill lookup and report-formatting tools do the same in the Skill Reporter stack. An HTTP deployment can serve both halves of either server from one process; a stdio deployment starts one server process per client. Lesson <a href="#lesson-23">23</a> then shows how the hosts that consume such a server discover its tools instead of hardcoding them.</div>
+  </article>
+
+  <!-- LESSON 23 -->
+  <article class="lesson" id="lesson-23">
+    <span class="lesson-tag">Lesson 23</span>
+    <h3>Dynamic Tool Discovery &amp; MCP Client Connection</h3>
+    <div class="problem"><b>The problem:</b> in Eunomia, compliance can require a new tool immediately — for example, splitting "general savings question" from "regulated advice request" before any answer is shown. If the agent carries a hardcoded tool list, that urgent server-side tool cannot be used until the agent is edited, rebuilt and redeployed. Skill Reporter hits the same failure mode when a new report-validation or publishing-safety tool exists on the server but the running agent still cannot see it.</div>
+
+    <p>An <span class="jargon">MCP client</span> (the part of the agent that connects to an MCP server, sends requests and reads replies) removes that last fixed list. It performs <span class="jargon">runtime discovery</span> (finding which tools exist while the program is running, rather than fixing the list when the code is built). In Eunomia, this means newly deployed account-check, consent-check, or simulation-gate tools become callable without waiting for an app redeploy. In Skill Reporter, newly deployed report-quality and publish-policy tools become callable the same way. The client opens a <span class="jargon">session</span> (the live connection and context used for discovery and calls) and begins it with a <span class="jargon">handshake</span> (the opening <code class="inline">initialize</code> exchange in which client and server agree on a protocol version), then asks for the current tools.</p>
+
+    <p>The reply is a <span class="jargon">tool manifest</span> (the server's list of each tool's name, description and input schema). A production client follows pagination until it has every page, then converts the complete manifest into definitions the large language model (the AI model that selects and calls tools), or LLM, can see. When the model selects one, a long-lived client sends the call through the still-open session. The short excerpts below demonstrate discovery only: both deliberately close after reading the first page, so they must not be used as the owner of an agent-lifetime session.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def discover_tools() -&gt; list[str]:
+    params = StdioServerParameters(command="python", args=["eunomia_server.py"])
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            manifest = await session.list_tools()
+            return [tool.name for tool in manifest.tools]</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+const client = new Client({ name: "eunomia-agent", version: "1.0.0" });
+const transport = new StdioClientTransport({
+  command: "python",
+  args: ["eunomia_server.py"],
+});
+
+try {
+  await client.connect(transport);
+  const manifest = await client.listTools();
+  const toolNames: string[] = manifest.tools.map((tool) =&gt; tool.name);
+} finally {
+  await client.close();
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 600">
+        <defs>
+          <marker id="ah23" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker>
+          <marker id="ah23l" markerWidth="10" markerHeight="7" refX="1" refY="3.5" orient="auto"><polygon points="10 0, 0 3.5, 10 7" fill="#64748b"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="175" y="30" width="230" height="52" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="290" y="61" fill="white" font-size="13" font-weight="600" text-anchor="middle">Agent + MCP Client</text>
+        <rect x="575" y="30" width="190" height="52" rx="8" fill="rgba(6,78,59,0.35)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="670" y="61" fill="white" font-size="13" font-weight="600" text-anchor="middle">MCP Server</text>
+        <line x1="290" y1="82" x2="290" y2="565" stroke="#475569" stroke-dasharray="5,5"/>
+        <line x1="670" y1="82" x2="670" y2="565" stroke="#475569" stroke-dasharray="5,5"/>
+
+        <line x1="290" y1="120" x2="665" y2="120" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah23)"/>
+        <text x="480" y="110" fill="#94a3b8" font-size="10" text-anchor="middle">initialize (protocol version)</text>
+        <line x1="670" y1="170" x2="295" y2="170" stroke="#34d399" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#ah23l)"/>
+        <text x="480" y="160" fill="#94a3b8" font-size="10" text-anchor="middle">capabilities: tools ✓</text>
+        <line x1="290" y1="220" x2="665" y2="220" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah23)"/>
+        <text x="480" y="210" fill="#94a3b8" font-size="10" text-anchor="middle">tools/list</text>
+        <line x1="670" y1="270" x2="295" y2="270" stroke="#34d399" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#ah23l)"/>
+        <text x="480" y="258" fill="#94a3b8" font-size="9" text-anchor="middle">manifest: [get_balance, list_savings_goals, project_interest]</text>
+
+        <rect x="180" y="305" width="220" height="66" rx="7" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="290" y="331" fill="white" font-size="11" font-weight="600" text-anchor="middle">Convert manifest →</text>
+        <text x="290" y="350" fill="white" font-size="11" font-weight="600" text-anchor="middle">LLM tool definitions</text>
+        <rect x="30" y="312" width="95" height="52" rx="7" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/>
+        <text x="77" y="343" fill="white" font-size="12" font-weight="600" text-anchor="middle">LLM</text>
+        <line x1="180" y1="338" x2="127" y2="338" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#ah23l)"/>
+        <text x="153" y="327" fill="#94a3b8" font-size="8" text-anchor="middle">available tools</text>
+
+        <line x1="290" y1="430" x2="665" y2="430" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah23)"/>
+        <text x="480" y="419" fill="#94a3b8" font-size="10" text-anchor="middle">tools/call get_balance {account_id}</text>
+        <line x1="670" y1="480" x2="295" y2="480" stroke="#34d399" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#ah23l)"/>
+        <text x="480" y="470" fill="#94a3b8" font-size="10" text-anchor="middle">result</text>
+
+        <rect x="560" y="515" width="300" height="52" rx="7" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="710" y="546" fill="#fde68a" font-size="11" font-weight="600" text-anchor="middle">No tool names appear in the agent's source code.</text>
+      </svg>
+      <p class="diagram-caption">HANDSHAKE → ASK THE SERVER WHAT EXISTS NOW → CONVERT ITS MANIFEST FOR THE LLM → CALL THE SELECTED TOOL</p>
+    </div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the two SDKs (software development kits, meaning the official client libraries) manage connection lifetime differently. Python ties the session to an <code class="inline">async with</code> block; TypeScript needs an explicit close call. Discovery helpers such as those above cannot later call a selected tool because they close before returning. An agent therefore needs a long-lived owner that keeps the session open through discovery and calls, follows every manifest page, and closes only during shutdown.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s own service deliberately keeps a fixed, reviewed set of three capabilities, because each one is part of a gated release. Runtime discovery applies to the other approved hosts that consume Eunomia's optional MCP server (building on the server from Lesson <a href="#lesson-6">6</a>), and Skill Reporter's consumers use the same long-lived pattern against its server. Each MCP client connects at startup, reads every page of the current manifest, builds its toolset and keeps that session available for calls until shutdown, so a consumer picks up a new server tool without its own redeploy. Lesson <a href="#lesson-32">32</a> layers live updates on top of this discovered toolset.</div>
+  </article>
+
+  <!-- LESSON 32 -->
+  <article class="lesson" id="lesson-32">
+    <span class="lesson-tag">Lesson 32</span>
+    <h3>MCP Real-Time Resource Subscriptions</h3>
+    <div class="problem"><b>The problem:</b> discovering tools at startup solves a changing catalogue, but Eunomia still needs fresh customer state during the conversation — balance, goal progress, and eligibility facts that can change after a deposit or profile update. Polling for those changes wastes calls and can leave Eunomia speaking from stale data. Skill Reporter has the same issue for report-ready state and policy updates during an active publishing workflow.</div>
+
+    <p>In MCP, a <span class="jargon">resource</span> (readable data exposed by the server at an address, rather than an action to perform) might live at <code class="inline">eunomia://accounts/123/balance</code>. That address is a Uniform Resource Identifier, or URI (the name of a particular MCP resource). The simplest way to watch it is <span class="jargon">polling</span> (asking the same question again and again on a timer to see if the answer changed), but most requests return “no” and the client can remain stale until the next timer fires.</p>
+
+    <p>A <span class="jargon">subscription</span> (a standing request asking the server to report whenever a named resource changes) reverses that flow. On a deposit, the server sends a <span class="jargon">notification</span> (a one-way message that expects no reply, here saying that a resource address was updated). The client reads the resource once and receives the fresh balance without a loop of empty checks. A multi-client server must record subscribed URIs separately for each live session, remove them on unsubscribe or disconnect, and notify only the relevant sessions.</p>
+
+    <p>The excerpts below isolate the update mechanism for one connected client. They do not implement production subscription routing: the Python call targets the session that invoked the tool, and the TypeScript set assumes exactly one connection.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from fastmcp import Context, FastMCP
+from pydantic import AnyUrl
+
+mcp = FastMCP("Eunomia")
+balances: dict[str, int] = {"123": 125_00}
+
+@mcp.resource("eunomia://accounts/{account_id}/balance")
+async def balance(account_id: str) -&gt; str:
+    return str(balances[account_id])
+
+@mcp.tool
+async def record_deposit(account_id: str, pence: int, ctx: Context) -&gt; str:
+    balances[account_id] += pence
+    uri = AnyUrl(f"eunomia://accounts/{account_id}/balance")
+    await ctx.session.send_resource_updated(uri)
+    return "deposit recorded"</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SubscribeRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+
+const server = new McpServer(
+  { name: "eunomia", version: "1.0.0" },
+  { capabilities: { resources: { subscribe: true } } },
+);
+const subscribedUrisForThisConnection = new Set&lt;string&gt;();
+server.server.setRequestHandler(SubscribeRequestSchema, async (request) =&gt; {
+  subscribedUrisForThisConnection.add(request.params.uri);
+  return {};
+});
+
+async function balanceChanged(uri: string): Promise&lt;void&gt; {
+  if (subscribedUrisForThisConnection.has(uri)) {
+    await server.server.sendResourceUpdated({ uri });
+  }
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 480">
+        <defs>
+          <marker id="ah32" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker>
+          <marker id="ah32u" markerWidth="10" markerHeight="7" refX="1" refY="3.5" orient="auto"><polygon points="10 0, 0 3.5, 10 7" fill="#64748b"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <line x1="420" y1="30" x2="420" y2="450" stroke="#334155" stroke-width="1.5"/>
+        <text x="210" y="35" fill="#fb7185" font-size="14" font-weight="600" text-anchor="middle">Before: Polling</text>
+        <text x="660" y="35" fill="#34d399" font-size="14" font-weight="600" text-anchor="middle">After: Subscription</text>
+
+        <rect x="130" y="58" width="160" height="46" rx="7" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/>
+        <text x="210" y="86" fill="white" font-size="12" font-weight="600" text-anchor="middle">Client</text>
+        <rect x="130" y="370" width="160" height="46" rx="7" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/>
+        <text x="210" y="398" fill="white" font-size="12" font-weight="600" text-anchor="middle">Server</text>
+        <line x1="160" y1="108" x2="160" y2="364" stroke="#fbbf24" marker-end="url(#ah32)"/><text x="93" y="135" fill="#94a3b8" font-size="8">changed? (every 5s)</text>
+        <line x1="185" y1="108" x2="185" y2="364" stroke="#fbbf24" marker-end="url(#ah32)"/><text x="185" y="345" fill="#fb7185" font-size="8" text-anchor="middle">no</text>
+        <line x1="210" y1="108" x2="210" y2="364" stroke="#fbbf24" marker-end="url(#ah32)"/><text x="210" y="325" fill="#fb7185" font-size="8" text-anchor="middle">no</text>
+        <line x1="235" y1="108" x2="235" y2="364" stroke="#fbbf24" marker-end="url(#ah32)"/><text x="235" y="305" fill="#fb7185" font-size="8" text-anchor="middle">no</text>
+        <line x1="260" y1="108" x2="260" y2="364" stroke="#fbbf24" marker-end="url(#ah32)"/><text x="260" y="285" fill="#34d399" font-size="8" text-anchor="middle">yes</text>
+        <path d="M 160 350 Q 145 320 160 290 M 185 330 Q 170 300 185 270 M 210 310 Q 195 280 210 250 M 235 290 Q 220 260 235 230 M 260 270 Q 245 240 260 210" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ah32u)"/>
+        <text x="210" y="447" fill="#fb7185" font-size="11" font-weight="600" text-anchor="middle">Wasted calls + up to 5s stale.</text>
+
+        <rect x="450" y="70" width="120" height="52" rx="7" fill="rgba(76,29,149,0.4)" stroke="#a78bfa"/>
+        <text x="510" y="101" fill="white" font-size="12" font-weight="600" text-anchor="middle">Client</text>
+        <rect x="650" y="175" width="160" height="66" rx="7" fill="rgba(6,78,59,0.35)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="730" y="202" fill="white" font-size="12" font-weight="600" text-anchor="middle">MCP Server</text>
+        <text x="730" y="220" fill="#94a3b8" font-size="9" text-anchor="middle">routes by subscribed session</text>
+        <rect x="675" y="70" width="190" height="52" rx="7" fill="rgba(120,53,15,0.3)" stroke="#fbbf24"/>
+        <text x="770" y="91" fill="white" font-size="10" font-weight="600" text-anchor="middle">Data Change</text><text x="770" y="108" fill="#94a3b8" font-size="9" text-anchor="middle">deposit lands</text>
+        <path d="M 570 92 Q 625 110 680 175" fill="none" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#ah32)"/>
+        <text x="615" y="105" fill="#94a3b8" font-size="8" text-anchor="middle">resources/subscribe</text><text x="615" y="116" fill="#94a3b8" font-size="8" text-anchor="middle">(balance URI)</text>
+        <line x1="770" y1="122" x2="750" y2="172" stroke="#fbbf24" stroke-width="1.4" marker-end="url(#ah32)"/>
+        <path d="M 650 205 Q 575 180 520 125" fill="none" stroke="#34d399" stroke-width="1.6" stroke-dasharray="5,4" marker-end="url(#ah32u)"/>
+        <text x="560" y="175" fill="#34d399" font-size="8" text-anchor="middle">notifications/resources/updated</text><text x="560" y="187" fill="#34d399" font-size="8" text-anchor="middle">(URI only)</text>
+        <path d="M 520 122 Q 560 255 650 220" fill="none" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#ah32)"/>
+        <text x="568" y="260" fill="#94a3b8" font-size="9" text-anchor="middle">resources/read</text>
+        <path d="M 680 241 Q 600 335 525 123" fill="none" stroke="#34d399" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#ah32u)"/>
+        <text x="650" y="321" fill="#34d399" font-size="9" text-anchor="middle">new balance</text>
+        <text x="660" y="447" fill="#34d399" font-size="11" font-weight="600" text-anchor="middle">One notification, one read, no polling interval.</text>
+      </svg>
+      <p class="diagram-caption">POLLING REPEATS EMPTY CALLS AND CAN BE STALE; A SUBSCRIPTION PUSHES ONE ADDRESS UPDATE, THEN THE CLIENT READS ONCE</p>
+    </div>
+
+    <blockquote>A resource update is a signal, not a durable event log. Subscriptions improve live responsiveness; they do not guarantee that a disconnected client can recover every change it missed.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the TypeScript excerpt is a handler fragment layered onto Lesson <a href="#lesson-6">6</a>'s connected server; by itself it omits the transport connection bootstrap and is not standalone. The notification contains only the resource's address, not its new value, so the client must perform a second read. Nothing replays an update that happened before subscription setup or while the connection was down; it is simply lost. The one-client excerpts above are not sufficient for a shared network server: that version also needs per-session subscribe and unsubscribe handling, disconnect cleanup, a resource-read handler and dispatch only to sessions subscribed to the changed URI. Subscription APIs vary between SDK versions, so the installed version and transport must be checked before the design relies on them.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s read-only first release does not subscribe to a customer's balance or savings-goal progress: each turn reads a fresh snapshot through <code class="inline">readSnapshot</code> and freezes it as evidence. Subscriptions appear only at the optional MCP server, where a host can be told that the catalogue version changed and then re-read it, while a turn already in progress keeps its pinned catalogue version. Skill Reporter applies the same subscription pattern to report-ready and policy-update resources so publication decisions use fresh state instead of stale polling snapshots.</div>
+  </article>
+
+  <!-- LESSON 33 -->
+  <article class="lesson" id="lesson-33">
+    <span class="lesson-tag">Lesson 33</span>
+    <h3>Dynamic Tool Synthesis &amp; Runtime Registration</h3>
+    <div class="problem"><b>The problem:</b> Eunomia can receive customer questions that need a narrow helper tool that does not exist yet (for example, a specific savings projection transform). If every tool must be prewritten, discovery can only confirm the gap and the customer flow stalls until a developer ships a new release. Skill Reporter encounters the same stall when a report-formatting helper is missing in the middle of a reporting run.</div>
+
+    <p><span class="jargon">Tool synthesis</span> (having an AI or code generator write the source of a new tool function instead of a human writing it) can fill narrow, low-risk gaps. In Eunomia, that means bounded read-only helpers such as calculations or formatting, never money movement or customer-record mutation. In Skill Reporter, that means bounded report-transformation helpers, never privileged publication actions. Before registration, generated source must pass syntax checks, an import allow-list, known test inputs and a sandbox run. A <span class="jargon">sandbox</span> (a locked-down environment where untrusted code has limited access) is essential because generated source must be treated as hostile until proven otherwise.</p>
+
+    <p>If that separate gate succeeds, <span class="jargon">runtime registration</span> (adding a tool to a running server's catalogue without restarting it) makes the function available. Connected clients must then be told to request the tool list again. In FastMCP, automatic <span class="jargon"><code class="inline">tools/list_changed</code> notifications</span> (messages telling clients that the catalogue changed) depend on registration occurring in an active MCP request context; otherwise the application must arrange notification explicitly. The excerpts below show only the final registration step after the omitted gate has completed, not code generation or sandboxing.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from math import ceil
+from fastmcp import FastMCP
+
+mcp = FastMCP("Eunomia")
+
+def months_to_goal(target_pence: int, monthly_pence: int) -&gt; int:
+    """Calculate whole months needed to reach a savings target."""
+    if target_pence &lt;= 0 or monthly_pence &lt;= 0:
+        raise ValueError("amounts must be positive")
+    return ceil(target_pence / monthly_pence)
+
+def register_validated_tool() -&gt; None:
+    mcp.add_tool(months_to_goal)</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+function registerMonthsToGoal(server: McpServer): void {
+  server.registerTool("months_to_goal", {
+    description: "Calculate whole months needed to reach a savings target",
+    inputSchema: {
+      targetPence: z.number().int().positive(),
+      monthlyPence: z.number().int().positive(),
+    },
+  }, async ({ targetPence, monthlyPence }) =&gt; ({
+    content: [{
+      type: "text",
+      text: String(Math.ceil(targetPence / monthlyPence)),
+    }],
+  }));
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 760">
+        <defs><marker id="ah33" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="205" y="25" width="490" height="62" rx="8" fill="rgba(30,41,59,0.6)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="450" y="51" fill="white" font-size="11" font-weight="600" text-anchor="middle">User request:</text><text x="450" y="70" fill="#cbd5e1" font-size="11" text-anchor="middle">“How long until I save £2,000 at £150/month?”</text>
+        <line x1="450" y1="87" x2="450" y2="117" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah33)"/>
+        <rect x="250" y="120" width="400" height="55" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="450" y="153" fill="white" font-size="12" font-weight="600" text-anchor="middle">Agent: no matching tool found</text>
+
+        <rect x="185" y="198" width="530" height="225" rx="12" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="7,5"/>
+        <text x="205" y="220" fill="#a78bfa" font-size="10" font-weight="600">🔒 Sandbox boundary</text>
+        <line x1="450" y1="175" x2="450" y2="237" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah33)"/>
+        <rect x="230" y="240" width="440" height="62" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="450" y="265" fill="white" font-size="11" font-weight="600" text-anchor="middle">Code Generator (LLM)</text><text x="450" y="284" fill="#c4b5fd" font-size="10" text-anchor="middle">writes months_to_goal(target_pence, monthly_pence)</text>
+        <line x1="450" y1="302" x2="450" y2="330" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah33)"/>
+        <rect x="215" y="333" width="470" height="66" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="450" y="357" fill="white" font-size="11" font-weight="600" text-anchor="middle">Validation Gate</text><text x="450" y="378" fill="#fde68a" font-size="9" text-anchor="middle">syntax check · allowed imports only · test inputs · sandbox run</text>
+        <path d="M 685 366 Q 735 366 760 330" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah33)"/>
+        <rect x="722" y="270" width="155" height="55" rx="7" fill="rgba(136,19,55,0.4)" stroke="#fb7185"/>
+        <text x="799" y="292" fill="white" font-size="9" font-weight="600" text-anchor="middle">Rejected → logged,</text><text x="799" y="308" fill="#fecdd3" font-size="9" text-anchor="middle">not registered</text>
+
+        <line x1="450" y1="423" x2="450" y2="455" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah33)"/>
+        <rect x="250" y="458" width="400" height="58" rx="8" fill="rgba(6,78,59,0.35)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="450" y="492" fill="white" font-size="12" font-weight="600" text-anchor="middle">Register on MCP Server</text>
+        <rect x="30" y="460" width="150" height="54" rx="7" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/>
+        <text x="105" y="492" fill="white" font-size="10" font-weight="600" text-anchor="middle">Connected Clients</text>
+        <line x1="250" y1="476" x2="182" y2="476" stroke="#a78bfa" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#ah33)"/>
+        <text x="215" y="465" fill="#a78bfa" font-size="8" text-anchor="middle">tools/list_changed if configured</text>
+        <line x1="180" y1="502" x2="248" y2="502" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#ah33)"/>
+        <text x="214" y="522" fill="#94a3b8" font-size="8" text-anchor="middle">re-list tools</text>
+
+        <line x1="450" y1="516" x2="450" y2="565" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah33)"/>
+        <rect x="205" y="568" width="490" height="64" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="450" y="595" fill="white" font-size="11" font-weight="600" text-anchor="middle">Agent calls new tool</text><text x="450" y="615" fill="#67e8f9" font-size="10" text-anchor="middle">answer returned to user</text>
+        <text x="450" y="700" fill="#94a3b8" font-size="11" text-anchor="middle">Generate only inside a boundary; register only after evidence from validation.</text>
+      </svg>
+      <p class="diagram-caption">MISSING CAPABILITY → GENERATE IN A SANDBOX → VALIDATE OR REJECT → REGISTER → NOTIFY WHERE CONFIGURED → RE-LIST → USE</p>
+    </div>
+
+    <blockquote>Eunomia may synthesise a small calculator for a savings projection or “what-if” deposit scenario. It must never synthesise code that moves money or reads customer records; those tools remain human-written, reviewed and deliberately deployed.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> Python can derive a tool's input schema from type hints (annotations that state the expected Python types), but the manifest produced for an unannotated parameter is FastMCP-version-dependent and must be inspected against the pinned package version. TypeScript types are erased at runtime, so a runtime schema must be supplied explicitly. In either language, <code class="inline">exec</code> and <code class="inline">eval</code> execute source text at runtime; passing generated text to them outside the omitted sandbox and validation gate would bypass the protection this design requires.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release deliberately does not synthesise or register tools at runtime: its three capabilities and the two tools on its optional MCP server are written by people, reviewed, and shipped through the quality gate, so the advertised contract changes only through a release. If synthesis is added later, this lesson's rules hold: only low-risk calculator or formatting helpers, only a complete implementation may register one, and Lesson <a href="#lesson-48">48</a> checks every call against advertised schemas before execution. The boundary must be <span class="jargon">capability-based</span> (generated code is technically denied powers it was not granted), not merely a warning in a prompt: the sandbox gives generated code no access to money movement or customer data in Eunomia, and no access to protected report destinations in Skill Reporter, which defers synthesis the same way.</div>
+  </article>
+
+  <!-- LESSON 48 -->
+  <article class="lesson" id="lesson-48">
+    <span class="lesson-tag">Lesson 48</span>
+    <h3>Dynamic Tool Schema Introspection for Runtime-Registered Tools</h3>
+    <div class="problem"><b>The problem:</b> an agent can now discover old and newly synthesised tools, but discovery alone does not prove that the arguments it sends are valid. In Eunomia, malformed arguments can hit account-scoped or simulation-gated financial logic with unclear failures; in Skill Reporter, malformed arguments can reach report-generation or publish-policy tools and fail too late. Without a local checker, both systems push bad input into critical paths instead of stopping early with a repairable error.</div>
+
+    <p>Every manifest carries <span class="jargon">JSON Schema</span> (a standard, written in JSON, that describes what data must look like, including field types and which fields are required). The client uses <span class="jargon">introspection</span> (examining a description at runtime to learn its structure) to turn that advertised schema into executable validation before making a call.</p>
+
+    <p>Python and TypeScript use <span class="jargon">Pydantic / Zod</span> (validation libraries for Python and TypeScript respectively, which reject data that does not match a declared shape and return clear errors). Here the declaration is not handwritten: the converter creates a <span class="jargon">dynamic model</span> (a validation class or schema object built by code while the program runs). Valid arguments proceed to the server; invalid ones become a structured error the language model can use to repair its next attempt.</p>
+
+    <p>The converters below are deliberately incomplete sketches for a small flat subset. They do not preserve all JSON Schema semantics and must not be treated as production validation.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from typing import Any
+from pydantic import BaseModel, create_model
+
+JSON_TYPES: dict[str, type] = {"string": str, "number": float, "integer": int}
+
+def validator_for(name: str, schema: dict[str, Any]) -&gt; type[BaseModel]:
+    required = set(schema.get("required", []))
+    fields = {
+        key: (JSON_TYPES[value["type"]], ... if key in required else None)
+        for key, value in schema["properties"].items()
+    }
+    return create_model(f"{name}Arguments", **fields)
+
+tool_schema: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "target": {"type": "number"},
+        "monthly": {"type": "number"},
+    },
+    "required": ["target", "monthly"],
+}
+Arguments = validator_for("months_to_goal", tool_schema)
+validated = Arguments.model_validate({"target": 2000, "monthly": 150})</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { z, type ZodTypeAny } from "zod";
+
+type JsonSchema = {
+  properties: Record&lt;string, { type: "string" | "number" }&gt;;
+  required?: string[];
+};
+const jsonTypes: Record&lt;string, ZodTypeAny&gt; = {
+  string: z.string(),
+  number: z.number(),
+};
+
+function validatorFor(schema: JsonSchema): z.ZodObject&lt;Record&lt;string, ZodTypeAny&gt;&gt; {
+  const required = new Set(schema.required ?? []);
+  const shape = Object.fromEntries(Object.entries(schema.properties).map(([key, value]) =&gt;
+    [key, required.has(key) ? jsonTypes[value.type] : jsonTypes[value.type].optional()],
+  ));
+  return z.object(shape);
+}
+
+const argumentsValidator = validatorFor({
+  properties: {
+    target: { type: "number" },
+    monthly: { type: "number" },
+  },
+  required: ["target", "monthly"],
+});
+const validated = argumentsValidator.parse({ target: 2000, monthly: 150 });</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 410">
+        <defs><marker id="ah48" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <text x="450" y="28" fill="#cbd5e1" font-size="11" font-weight="600" text-anchor="middle">For the supported subset, the server's description becomes the checker.</text>
+
+        <rect x="20" y="120" width="120" height="62" rx="8" fill="rgba(6,78,59,0.35)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="80" y="157" fill="white" font-size="12" font-weight="600" text-anchor="middle">MCP Server</text>
+        <line x1="140" y1="151" x2="185" y2="151" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah48)"/>
+        <text x="162" y="140" fill="#94a3b8" font-size="8" text-anchor="middle">tools/list</text>
+
+        <rect x="188" y="90" width="190" height="122" rx="8" fill="rgba(30,41,59,0.6)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="283" y="118" fill="white" font-size="11" font-weight="600" text-anchor="middle">Tool Manifest</text><text x="283" y="135" fill="#94a3b8" font-size="9" text-anchor="middle">JSON Schema per tool</text>
+        <rect x="202" y="153" width="162" height="42" rx="4" fill="rgba(2,6,23,0.7)" stroke="#1e293b"/>
+        <text x="283" y="169" fill="#67e8f9" font-size="8" font-family="monospace" text-anchor="middle">{target: number, required;</text><text x="283" y="184" fill="#67e8f9" font-size="8" font-family="monospace" text-anchor="middle">monthly: number, required}</text>
+        <line x1="378" y1="151" x2="423" y2="151" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah48)"/>
+        <text x="400" y="137" fill="#94a3b8" font-size="8" text-anchor="middle">introspect</text><text x="400" y="147" fill="#94a3b8" font-size="8" text-anchor="middle">+ convert</text>
+
+        <rect x="426" y="75" width="210" height="152" rx="8" fill="rgba(76,29,149,0.35)" stroke="#a78bfa" stroke-width="1.5"/>
+        <rect x="442" y="96" width="178" height="48" rx="5" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+        <text x="531" y="116" fill="white" font-size="9" font-weight="600" text-anchor="middle">Python: Pydantic</text><text x="531" y="132" fill="#c4b5fd" font-size="9" font-family="monospace" text-anchor="middle">create_model(...)</text>
+        <rect x="442" y="158" width="178" height="48" rx="5" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+        <text x="531" y="178" fill="white" font-size="9" font-weight="600" text-anchor="middle">TypeScript: Zod object</text><text x="531" y="194" fill="#c4b5fd" font-size="9" text-anchor="middle">built at runtime</text>
+        <line x1="636" y1="151" x2="681" y2="151" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah48)"/>
+
+        <rect x="684" y="110" width="150" height="82" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="759" y="147" fill="white" font-size="11" font-weight="600" text-anchor="middle">Validation Gate</text><text x="759" y="166" fill="#fde68a" font-size="8" text-anchor="middle">run before tools/call</text>
+        <rect x="675" y="270" width="168" height="50" rx="7" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/>
+        <text x="759" y="291" fill="white" font-size="9" font-weight="600" text-anchor="middle">LLM-proposed</text><text x="759" y="307" fill="#94a3b8" font-size="9" text-anchor="middle">arguments</text>
+        <line x1="759" y1="270" x2="759" y2="194" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#ah48)"/>
+
+        <path d="M 834 130 Q 860 105 877 85" fill="none" stroke="#34d399" stroke-width="1.6" marker-end="url(#ah48)"/>
+        <rect x="710" y="35" width="175" height="42" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+        <text x="797" y="61" fill="#a7f3d0" font-size="9" font-weight="600" text-anchor="middle">Valid → tools/call to server</text>
+        <path d="M 834 173 Q 860 205 878 235" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah48)"/>
+        <rect x="680" y="228" width="205" height="42" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185"/>
+        <text x="782" y="245" fill="#fecdd3" font-size="8" font-weight="600" text-anchor="middle">Invalid → structured error to LLM</text><text x="782" y="259" fill="#fecdd3" font-size="8" text-anchor="middle">so it can retry</text>
+      </svg>
+      <p class="diagram-caption">A SUPPORTED JSON SCHEMA SUBSET → A RUNTIME PYDANTIC OR ZOD CHECKER → VALID CALL, OR A STRUCTURED ERROR BEFORE FINANCIAL LOGIC RUNS</p>
+    </div>
+
+    <blockquote>A converter sits on a <span class="jargon">trust boundary</span> (the point where data moves from a less trusted component into a more trusted one). “It produced a validator” is not proof that the validator means the same thing as the server's schema; acceptance and rejection must be tested against the real manifest.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the sketches support only flat strings and numbers, plus Python integers. They omit booleans, arrays, objects, <code class="inline">null</code>, enumerations, bounds, patterns, multiple allowed types, nested objects, shared-definition references (<code class="inline">$ref</code>) and “one of these shapes” unions (<code class="inline">anyOf</code>). They also differ from JSON Schema over numeric-string coercion, unknown fields and optional versus required-but-<span class="jargon">nullable</span> fields (fields that are required to exist but allowed to contain <code class="inline">null</code>). A client checker can therefore accept input the server rejects, or reject input the server accepts. Production code should use a version-pinned converter with parity tests, or validate directly against JSON Schema.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> registers no tools at runtime in its first release, so this lesson applies to the hosts that consume its optional MCP server: they turn the advertised <code class="inline">lookupGuidance</code> and <code class="inline">queryCatalogue</code> schemas into local tool definitions, while the server still validates every call against the same Zod schemas. A host may rely on its own conversion only with a complete, version-pinned validator and acceptance/rejection parity tests for every manifest entry, and tools registered at runtime as in Lesson <a href="#lesson-33">33</a> would need the same. Skill Reporter follows the same rule. The small converters above demonstrate the idea, not that guarantee.</div>
+  </article>
+
+  <div class="lesson" id="part-2-through-line">
+    <span class="lesson-tag">Part II Through-Line</span>
+    <h3>From One Shared Implementation to Safe Dynamic Tooling</h3>
+    <p>These five lessons form one chain rather than five isolated techniques, and the chain applies to both Eunomia (fintech) and Skill Reporter. Lesson 6 creates shared MCP server foundations. Lesson 23 removes hardcoded tool lists. Lesson 32 adds session-aware live resource updates. Lesson 33 adds sandboxed runtime registration. Lesson 48 turns advertised schemas into client-side validation gates before calls. The result is one repeatable tool-platform pattern that can evolve without giving up explicit boundaries.</p>
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>const partTwo = [
+  [6, "Tools share one server implementation", "Eunomia MCP server exists", "Skill Reporter MCP server exists"],
+  [23, "Agent discovers tools at runtime", "No hardcoded Eunomia tool list", "No hardcoded Skill Reporter tool list"],
+  [32, "Server routes live resource changes", "Session-aware balance and goal updates", "Session-aware report-ready updates"],
+  [33, "Validated tools register while running", "Sandboxed calculator synthesis", "Sandboxed report-helper synthesis"],
+  [48, "Discovered schemas require parity tests", "Complete schemas checked before calls", "Complete schemas checked before calls"],
+] as const;</code></pre></div>
+  </div>
+</section>

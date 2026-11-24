@@ -1,0 +1,1057 @@
+<!-- ======================================================= -->
+<!-- PART I — FOUNDATIONS OF A TYPE-SAFE AGENT -->
+<!-- ======================================================= -->
+<section class="part" id="part-1">
+  <div class="part-header">
+    <div class="part-eyebrow">Part I</div>
+    <h2>Foundations of an Agent with Checked Data</h2>
+    <p class="part-intro">Before an <span class="jargon">AI agent</span> (software that lets a model use instructions, data, and tools to complete a task) can be trusted with real work, it needs replies a program can read, access to current facts, incremental delivery, evidence from private documents, and routing for multi-step decisions. This part builds those five foundations in Python and TypeScript and exercises each one with running examples.</p>
+
+    <div class="reader-note">
+      <p><b>Two problem domains run through this part:</b></p>
+      <ul>
+        <li><b>Domain A — Skill Reporter (simple baseline):</b> input is a job-market query. Goal is to extract a skill, assess demand, and produce structured output your code can trust.</li>
+        <li><b>Domain B — Fintech Service Agent (higher-risk):</b> input is a customer question about accounts, product rules, or simulation. Goal is to route safely, ground policy answers in evidence, and enforce consent/risk checks before simulations.</li>
+      </ul>
+      <p><b>How these lessons interlink:</b> Lesson 1 defines checked output contracts, Lesson 2 adds fresh tool data, Lesson 3 adds live delivery, Lesson 4 adds evidence grounding (RAG), and Lesson 5 adds graph routing that composes those earlier pieces.</p>
+      <p><b>Runnable-example rule for this part:</b> each snippet should include all imports it uses, and every variable should be introduced before first use.</p>
+    </div>
+
+  </div>
+
+  <!-- LESSON 1 -->
+  <article class="lesson" id="lesson-1">
+    <span class="lesson-tag">Lesson 1</span>
+    <h3>Agent Foundations with Checked Types</h3>
+    <div class="problem"><b>The problem:</b> Eunomia and Skill Reporter cannot operate reliably if model output is just free-form prose. Downstream code needs typed fields, not guesses from paragraphs. Without fixed output structure, both domains risk mis-parsing critical values and making wrong decisions.</div>
+
+    <p>The fix is <span class="jargon">type-safe</span> data (checked so values have the kinds the code expects): tell the AI which <span class="jargon">fields</span> (named values in a data object) to return and what kind each one is, using a <span class="jargon">schema</span> (a machine-checked description such as "field X is text, field Y is a whole number from 1 to 10"). In Python this is built with <code class="inline">Pydantic</code> (a Python data-validation library); in TypeScript, with <code class="inline">Zod</code> (a TypeScript data-validation library). A tool validates each answer against that schema before your own code sees it and can retry when an attempt does not fit. This checks structure and ranges, not whether the AI's claims are factually correct.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 260">
+        <defs>
+          <marker id="ah1" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="30" y="100" width="150" height="60" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="105" y="125" fill="white" font-size="13" font-weight="600" text-anchor="middle">Plain question</text>
+        <text x="105" y="143" fill="#94a3b8" font-size="10" text-anchor="middle">"How in-demand is X?"</text>
+
+        <line x1="180" y1="130" x2="238" y2="130" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah1)"/>
+
+        <rect x="240" y="60" width="190" height="140" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="335" y="88" fill="white" font-size="13" font-weight="600" text-anchor="middle">AI Agent</text>
+        <text x="335" y="108" fill="#94a3b8" font-size="10" text-anchor="middle">must answer in this</text>
+        <text x="335" y="122" fill="#94a3b8" font-size="10" text-anchor="middle">validated structure:</text>
+        <rect x="258" y="134" width="154" height="56" rx="4" fill="rgba(2,6,23,0.6)" stroke="#1e293b"/>
+        <text x="335" y="150" fill="#67e8f9" font-size="9" text-anchor="middle" font-family="monospace">skill_name: text</text>
+        <text x="335" y="164" fill="#67e8f9" font-size="9" text-anchor="middle" font-family="monospace">score: 1-10</text>
+        <text x="335" y="178" fill="#67e8f9" font-size="9" text-anchor="middle" font-family="monospace">reason: text</text>
+
+        <line x1="430" y1="130" x2="488" y2="130" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah1)"/>
+        <text x="459" y="120" fill="#94a3b8" font-size="9" text-anchor="middle">draft reply</text>
+
+        <rect x="490" y="80" width="170" height="100" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="575" y="105" fill="white" font-size="13" font-weight="600" text-anchor="middle">Schema check</text>
+        <text x="575" y="122" fill="#94a3b8" font-size="9" text-anchor="middle">does it match the</text>
+        <text x="575" y="135" fill="#94a3b8" font-size="9" text-anchor="middle">required fields above?</text>
+        <path d="M 575 160 Q 540 180 500 160 Q 460 140 490 120" fill="none" stroke="#fb7185" stroke-width="1.3" stroke-dasharray="4,3" marker-end="url(#ah1)"/>
+        <text x="500" y="185" fill="#fb7185" font-size="8" text-anchor="middle">no — retry</text>
+
+        <line x1="660" y1="130" x2="718" y2="130" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah1)"/>
+        <text x="689" y="120" fill="#94a3b8" font-size="9" text-anchor="middle">yes</text>
+
+        <rect x="720" y="100" width="150" height="60" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="795" y="125" fill="white" font-size="13" font-weight="600" text-anchor="middle">Your code</text>
+        <text x="795" y="143" fill="#94a3b8" font-size="10" text-anchor="middle">reads data.score safely</text>
+      </svg>
+      <p class="diagram-caption">PLAIN QUESTION → AI DRAFTS A REPLY → SCHEMA VALIDATES REQUIRED FIELDS (retry if it fails) → YOUR CODE READS CHECKED VALUES</p>
+    </div>
+
+    <p>Here's what that looks like in Python, using <code class="inline">pydantic_ai</code>: a <span class="jargon">BaseModel</span> (Pydantic's building block for defining a validated data model) called <code class="inline">MarketInsight</code> with three required fields, and an <code class="inline">Agent</code> told to produce values that pass those checks.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent
+
+
+class MarketInsight(BaseModel):
+    skill_name: str = Field(description="The exact name of the technical skill identified.")
+    demand_frequency: int = Field(ge=1, le=10, description="Frequency level found in text from 1 (low) to 10 (high).")
+    justification: str = Field(description="A single clear sentence explaining why this skill is needed.")
+
+
+market_agent = Agent(
+    "openai:gpt-4o",
+    output_type=MarketInsight,
+    system_prompt="Extract one skill and rate demand from 1 to 10.",
+)
+
+sample_job = "Hiring an AI engineer with strong LangGraph and Python experience."
+
+
+async def main() -> None:
+    result = await market_agent.run(sample_job)
+    data: MarketInsight = result.output
+    print(data.model_dump())
+
+
+if __name__ == "__main__":
+    asyncio.run(main())</code></pre></div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> field descriptions are not just comments for other developers — they are sent to the AI as part of its instructions and guide what it writes. Clear descriptions reduce ambiguity, while the schema performs the actual validation.</div>
+
+    <p>The TypeScript equivalent swaps Pydantic for Zod and <code class="inline">pydantic_ai</code> for the <span class="jargon">Vercel AI SDK</span> (a popular TypeScript library for generating text, calling tools, and streaming replies across model providers), but the idea is identical: define the schema once, hand it to the model-calling function, and validate the declared fields and constraints. These default object schemas do not promise to reject every undeclared extra property; configure strict rejection separately if that matters.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { generateObject } from "ai"
+import { openai } from "@ai-sdk/openai"
+import { z } from "zod"
+
+const MarketInsight = z.object({
+  skillName: z.string().describe("The exact name of the technical skill identified."),
+  demandFrequency: z.number().int().min(1).max(10).describe("Frequency level, 1 (low) to 10 (high)."),
+  justification: z.string().describe("A single clear sentence explaining why this skill is needed."),
+})
+
+const sampleJob = "Hiring an AI engineer with strong LangGraph and Python experience."
+
+async function main(): Promise&lt;void&gt; {
+  const { object: data } = await generateObject({
+    model: openai("gpt-4o"),
+    schema: MarketInsight,
+    prompt: sampleJob,
+  })
+  console.log(data)
+}
+
+main().catch(console.error)</code></pre></div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> the account facts <b>Eunomia</b> uses — balance, interest rate, maturity date — cross typed, validated capability boundaries before a template or the model turns them into customer-facing wording. The validation protects the data boundary; separate checks (Part X's verifier and quality suite) are still needed for the final prose.</div>
+  </article>
+
+  <!-- LESSON 2 -->
+  <article class="lesson" id="lesson-2">
+    <span class="lesson-tag">Lesson 2</span>
+    <h3>Fresh Request Data &amp; Tool Calling</h3>
+    <div class="problem"><b>The problem:</b> Eunomia and Skill Reporter both need current system facts, not only model memory. Training data can be stale, and prompt text alone cannot fetch live account or reporting state. Without explicit tools, both domains answer confidently with outdated or missing data.</div>
+
+    <p>Baking a live number straight into the AI's setup doesn't work either — the moment you have more than one user, or the number changes between requests, a <span class="jargon">hardcoded</span> value (one written directly into the program) is wrong. The fix is two matched pieces: a <span class="jargon">dependency</span> (fresh data or a service the agent needs) supplied for each request through <span class="jargon">dependency injection</span> (providing those needs from the outside instead of making the agent fetch global data itself), and a <span class="jargon">tool call</span> (a function the AI can decide to run mid-answer instead of only replying with text) that reads from that bundle.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 230">
+        <defs><marker id="ah2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+
+        <rect x="30" y="30" width="170" height="60" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="115" y="55" fill="white" font-size="12" font-weight="600" text-anchor="middle">Live data bundle</text>
+        <text x="115" y="72" fill="#94a3b8" font-size="9" text-anchor="middle">(fresh per request)</text>
+
+        <line x1="115" y1="90" x2="115" y2="118" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah2)"/>
+
+        <rect x="30" y="120" width="300" height="90" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="180" y="145" fill="white" font-size="13" font-weight="600" text-anchor="middle">AI Agent</text>
+        <text x="180" y="163" fill="#94a3b8" font-size="10" text-anchor="middle">"what's current demand</text>
+        <text x="180" y="177" fill="#94a3b8" font-size="10" text-anchor="middle">for Skill X?"</text>
+        <text x="180" y="195" fill="#67e8f9" font-size="9" text-anchor="middle">decides it needs real data</text>
+
+        <line x1="330" y1="165" x2="408" y2="165" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah2)"/>
+        <text x="369" y="155" fill="#94a3b8" font-size="9" text-anchor="middle">calls tool</text>
+
+        <rect x="410" y="120" width="200" height="90" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="510" y="145" fill="white" font-size="12" font-weight="600" text-anchor="middle">fetch_live_skill_count()</text>
+        <text x="510" y="163" fill="#94a3b8" font-size="9" text-anchor="middle">reads the bundle,</text>
+        <text x="510" y="177" fill="#94a3b8" font-size="9" text-anchor="middle">returns a real number</text>
+
+        <line x1="610" y1="165" x2="668" y2="165" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah2)"/>
+        <text x="639" y="155" fill="#94a3b8" font-size="9" text-anchor="middle">142</text>
+
+        <rect x="670" y="120" width="200" height="90" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="770" y="145" fill="white" font-size="12" font-weight="600" text-anchor="middle">AI can finish its answer</text>
+        <text x="770" y="163" fill="#94a3b8" font-size="9" text-anchor="middle">using the REAL number,</text>
+        <text x="770" y="177" fill="#94a3b8" font-size="9" text-anchor="middle">not a guess</text>
+      </svg>
+      <p class="diagram-caption">LIVE DATA BUNDLE INJECTED → AGENT DECIDES IT NEEDS A FACT → CALLS A TOOL → TOOL READS THE BUNDLE → A BOUNDED FOLLOW-UP STEP CAN WORD THE RESULT</p>
+    </div>
+
+    <p>In Python, this is <code class="inline">deps_type</code> plus a <span class="jargon">decorated function</span> (a function registered by placing <code class="inline">@agent.tool</code> above it):</p>
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+from dataclasses import dataclass
+
+from pydantic import BaseModel
+from pydantic_ai import Agent, RunContext
+
+
+@dataclass
+class DatabaseDeps:
+    user_id: str
+    skill_database: dict[str, int]
+
+
+class TrendAssessment(BaseModel):
+    skill_name: str
+    live_count: int
+    summary: str
+
+
+trend_agent = Agent(
+    "openai:gpt-4o",
+    deps_type=DatabaseDeps,
+    output_type=TrendAssessment,
+    system_prompt="Use the tool to get the live count before answering.",
+)
+
+
+@trend_agent.tool
+async def fetch_live_skill_count(ctx: RunContext[DatabaseDeps], skill_name: str) -> int:
+    return ctx.deps.skill_database.get(skill_name.lower().strip(), 0)
+
+
+mock_deps = DatabaseDeps(
+    user_id="demo-user",
+    skill_database={"langgraph": 142, "pydantic": 118, "llamaindex": 96},
+)
+prompt = "What is live demand for LangGraph?"
+
+
+async def main() -> None:
+    result = await trend_agent.run(prompt, deps=mock_deps)
+    print(result.output.model_dump())
+
+
+if __name__ == "__main__":
+    asyncio.run(main())</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { generateText, stepCountIs, tool } from "ai"
+import { openai } from "@ai-sdk/openai"
+import { z } from "zod"
+
+interface DatabaseDeps {
+  userId: string
+  skillDatabase: Record&lt;string, number&gt;
+}
+
+const SkillNameSchema = z.object({ skillName: z.string() })
+
+const deps: DatabaseDeps = {
+  userId: "demo-user",
+  skillDatabase: { langgraph: 142, pydantic: 118, llamaindex: 96 },
+}
+
+const prompt = "What is live demand for LangGraph?"
+
+async function fetchLiveSkillCount(deps: DatabaseDeps, skillName: string): Promise&lt;number&gt; {
+  return deps.skillDatabase[skillName.toLowerCase().trim()] ?? 0
+}
+
+async function main(): Promise&lt;void&gt; {
+  const result = await generateText({
+    model: openai("gpt-4o"),
+    tools: {
+      fetchLiveSkillCount: tool({
+        description: "Look up the current count for a skill.",
+        inputSchema: SkillNameSchema,
+        execute: (args) =&gt; fetchLiveSkillCount(deps, args.skillName),
+      }),
+    },
+    stopWhen: stepCountIs(3),
+    prompt,
+  })
+  console.log(result.text)
+}
+
+main().catch(console.error)</code></pre></div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the Python dataclass gives constructor structure and the TypeScript interface gives compile-time field checks, but neither is a strict runtime schema. If request data comes from an external boundary, validate it there; otherwise a missing lookup can still collapse to the examples' default value of zero.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> this is how <b>Eunomia</b> gets a real customer's balance — the service calls its <code class="inline">readSnapshot</code> capability, whose scope is injected from the verified token for the authenticated customer only, so the actual numbers come from the account store, never from a value typed into a prompt by a developer.</div>
+  </article>
+
+  <!-- LESSON 3 -->
+  <article class="lesson" id="lesson-3">
+    <span class="lesson-tag">Lesson 3</span>
+    <h3>Streaming Replies / A Live-Typing Chat Page</h3>
+    <div class="problem"><b>The problem:</b> Eunomia and Skill Reporter can generate valid answers slowly enough to appear broken. If users see no progress while work is running, trust drops and retries increase. Both domains need streaming and explicit progress state, not silent waits.</div>
+
+    <p>The fix is <span class="jargon">streaming</span> (sending a reply piece by piece as it is generated instead of waiting for the whole response). In a browser, the HTTP response body is exposed to JavaScript as a <span class="jargon">ReadableStream</span> (a Web API for consuming streamed data), so the user sees <span class="jargon">chunks</span> (pieces delivered by the stream) arrive like live typing in a modern chat interface. Tool arguments can still be type-checked and schema-validated before execution; this example does not add runtime validation for the tool's returned value.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 200">
+        <defs><marker id="ah3" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="30" y="60" width="170" height="80" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="115" y="90" fill="white" font-size="12" font-weight="600" text-anchor="middle">Browser</text>
+        <text x="115" y="108" fill="#94a3b8" font-size="9" text-anchor="middle">POST /api/chat</text>
+        <text x="115" y="122" fill="#94a3b8" font-size="9" text-anchor="middle">waits for pieces</text>
+
+        <line x1="200" y1="100" x2="258" y2="100" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah3)"/>
+
+        <rect x="260" y="40" width="220" height="120" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="370" y="65" fill="white" font-size="12" font-weight="600" text-anchor="middle">streamText()</text>
+        <text x="370" y="83" fill="#94a3b8" font-size="9" text-anchor="middle">calls the model, streams</text>
+        <text x="370" y="97" fill="#94a3b8" font-size="9" text-anchor="middle">the HTTP response body</text>
+        <text x="370" y="111" fill="#94a3b8" font-size="9" text-anchor="middle">instead of one final block</text>
+        <text x="370" y="129" fill="#67e8f9" font-size="9" text-anchor="middle">"The" "liquidity" "buffer"...</text>
+        <text x="370" y="143" fill="#67e8f9" font-size="9" text-anchor="middle">(57 chunks in the TS run)</text>
+
+        <path d="M 260 100 Q 230 60 200 100" fill="none" stroke="#34d399" stroke-width="1.3" marker-end="url(#ah3)"/>
+        <text x="225" y="70" fill="#34d399" font-size="8" text-anchor="middle">chunk 1</text>
+        <path d="M 265 115 Q 235 90 203 110" fill="none" stroke="#34d399" stroke-width="1" opacity="0.6" marker-end="url(#ah3)"/>
+        <path d="M 268 128 Q 238 115 206 122" fill="none" stroke="#34d399" stroke-width="0.8" opacity="0.4" marker-end="url(#ah3)"/>
+
+        <rect x="500" y="60" width="200" height="80" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="600" y="90" fill="white" font-size="12" font-weight="600" text-anchor="middle">Tool call mid-stream</text>
+        <text x="600" y="108" fill="#94a3b8" font-size="9" text-anchor="middle">arguments remain typed</text>
+        <text x="600" y="122" fill="#94a3b8" font-size="9" text-anchor="middle">&amp; schema-validated</text>
+        <line x1="480" y1="100" x2="498" y2="100" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah3)"/>
+      </svg>
+      <p class="diagram-caption">BROWSER REQUESTS → HTTP RESPONSE BODY STREAMS → TEXT ARRIVES IN CHUNKS WHILE TOOL ARGUMENTS REMAIN TYPED AND VALIDATED</p>
+    </div>
+
+    <p>The way to actually prove a reply is streaming — rather than one big blocking response dressed up to look streamed — is to measure it directly: count the chunks and time the gap between the first one arriving and the whole thing finishing. The Python example observes model-output deltas in a terminal; the TypeScript example observes stream parts that an HTTP handler can pass to a browser. They test the same incremental-generation idea at different layers.</p>
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+import time
+
+from pydantic_ai import Agent
+
+
+trend_agent = Agent("openai:gpt-4o", system_prompt="Answer in plain English.")
+prompt = "Explain in two short sentences why liquidity buffers matter."
+
+
+async def main() -> None:
+    chunk_count = 0
+    started = time.perf_counter()
+    first_chunk_ms = None
+
+    async with trend_agent.run_stream(prompt) as result:
+        async for chunk in result.stream_text(delta=True):
+            if chunk:
+                chunk_count += 1
+                if first_chunk_ms is None:
+                    first_chunk_ms = (time.perf_counter() - started) * 1000
+
+    total_ms = (time.perf_counter() - started) * 1000
+    print(f"chunks={chunk_count}, first_chunk_ms={first_chunk_ms:.1f}, total_ms={total_ms:.1f}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { streamText } from "ai"
+import { openai } from "@ai-sdk/openai"
+
+async function main(): Promise&lt;void&gt; {
+  const started = Date.now()
+  let chunkCount = 0
+  let firstChunkMs: number | null = null
+
+  const result = streamText({
+    model: openai("gpt-4o"),
+    prompt: "Explain in two short sentences why liquidity buffers matter.",
+  })
+
+  for await (const part of result.fullStream) {
+    if (part.type === "text-delta" && part.textDelta.length &gt; 0) {
+      chunkCount += 1
+      if (firstChunkMs === null) firstChunkMs = Date.now() - started
+    }
+  }
+
+  const totalMs = Date.now() - started
+  console.log({ chunkCount, firstChunkMs, totalMs })
+}
+
+main().catch(console.error)</code></pre></div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a terse, purely numeric question can produce a reply with <em>zero</em> narrated text chunks — the model goes straight to a tool call and stops, because there's nothing to narrate. That's not a bug; it's a reminder that "no text streamed" and "streaming is broken" are two different claims that need separate checks.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s chat page keeps this lesson's goal (visible progress instead of a silent wait) with one deliberate change: the service verifies the whole answer before streaming, so the web client receives paced, already-verified <code class="inline">answer.delta</code> events closed by one <code class="inline">answer.final</code>, not live model tokens. Text already shown in a browser cannot be recalled, so the first release never streams unchecked chunks.</div>
+  </article>
+
+  <!-- LESSON 4 -->
+  <article class="lesson" id="lesson-4">
+    <span class="lesson-tag">Lesson 4</span>
+    <h3>Evidence-Based Answers with a Search-Then-Answer Workflow</h3>
+    <div class="problem"><b>The problem:</b> Eunomia and Skill Reporter can sound confident while being wrong when answers are not grounded in approved sources. Model pretraining does not include your current product and policy truth. Both domains need retrieval-backed evidence to prevent confident hallucinations.</div>
+
+    <p>The fix is <span class="jargon">RAG</span> (Retrieval-Augmented Generation — searching real documents before asking the AI to answer) to make responses <span class="jargon">grounded</span> (conditioned on supplied evidence). This example uses <span class="jargon">vector search</span> (matching numeric representations of meaning rather than exact words), applies a minimum relevance threshold, and returns a fixed no-evidence message when nothing qualifies. It is the first genuine multi-step <span class="jargon">workflow</span> (a pipeline where each step does one job and passes its result to the next): search, check relevance, then generate.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 220">
+        <defs><marker id="ah4" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="30" y="80" width="140" height="60" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="100" y="105" fill="white" font-size="12" font-weight="600" text-anchor="middle">User question</text>
+        <text x="100" y="122" fill="#94a3b8" font-size="9" text-anchor="middle">"what rate applies?"</text>
+
+        <line x1="170" y1="110" x2="228" y2="110" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah4)"/>
+
+        <rect x="230" y="60" width="200" height="100" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="330" y="88" fill="white" font-size="12" font-weight="600" text-anchor="middle">Step 1: Search</text>
+        <text x="330" y="106" fill="#94a3b8" font-size="9" text-anchor="middle">vector search by MEANING,</text>
+        <text x="330" y="120" fill="#94a3b8" font-size="9" text-anchor="middle">not exact keyword match,</text>
+        <text x="330" y="134" fill="#94a3b8" font-size="9" text-anchor="middle">over real stored documents</text>
+
+        <line x1="430" y1="110" x2="488" y2="110" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah4)"/>
+        <text x="459" y="100" fill="#94a3b8" font-size="9" text-anchor="middle">top matches</text>
+
+        <rect x="490" y="60" width="200" height="100" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="590" y="88" fill="white" font-size="12" font-weight="600" text-anchor="middle">Step 2: Generate</text>
+        <text x="590" y="106" fill="#94a3b8" font-size="9" text-anchor="middle">"Use this retrieved</text>
+        <text x="590" y="120" fill="#94a3b8" font-size="9" text-anchor="middle">evidence for the answer"</text>
+        <text x="590" y="134" fill="#94a3b8" font-size="9" text-anchor="middle">after relevance check</text>
+
+        <line x1="690" y1="110" x2="748" y2="110" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah4)"/>
+
+        <rect x="750" y="80" width="130" height="60" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="815" y="105" fill="white" font-size="12" font-weight="600" text-anchor="middle">Evidence-based</text>
+        <text x="815" y="122" fill="#94a3b8" font-size="9" text-anchor="middle">answer</text>
+      </svg>
+      <p class="diagram-caption">QUESTION → SEARCH BY MEANING → RELEVANCE CHECK → GENERATE FROM RETRIEVED EVIDENCE, OR RETURN A FIXED NO-EVIDENCE MESSAGE</p>
+    </div>
+
+    <p>Splitting search and generation into two separate steps — instead of one function that does both — means either step can be tested, replaced, or reordered on its own: a real document database can later replace the sample sentences without touching how the final answer gets generated.</p>
+
+    <blockquote>Instruction that matters, but is not an enforcement boundary: tell the AI to use the retrieved evidence. The relevance threshold prevents unsupported generation when search returns nothing useful; the prompt reduces the risk of blending in general knowledge, but cannot prove that every generated sentence came from the evidence.</blockquote>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+from dataclasses import dataclass
+
+from pydantic_ai import Agent
+
+
+@dataclass
+class Match:
+    text: str
+    score: float
+
+
+class InMemoryVectorStore:
+    def __init__(self, docs: list[str]) -> None:
+        self.docs = docs
+
+    async def search(self, query: str, top_k: int) -> list[Match]:
+        query_terms = set(query.lower().split())
+        scored: list[Match] = []
+        for doc in self.docs:
+            overlap = len(query_terms.intersection(doc.lower().split()))
+            score = overlap / max(len(query_terms), 1)
+            scored.append(Match(text=doc, score=score))
+        return sorted(scored, key=lambda m: m.score, reverse=True)[:top_k]
+
+
+vector_store = InMemoryVectorStore(
+    [
+        "ISA withdrawals may be restricted during a fixed term.",
+        "Instant access accounts allow withdrawals without notice.",
+        "Portfolio simulations require consent and a complete risk profile.",
+    ]
+)
+rag_agent = Agent("openai:gpt-4o", system_prompt="Answer using only the retrieved evidence.")
+MIN_RELEVANCE = 0.35
+question = "Can I withdraw early from a fixed-term ISA?"
+
+
+async def main() -> None:
+    matches = await vector_store.search(query=question, top_k=3)
+    relevant = [match for match in matches if match.score >= MIN_RELEVANCE]
+    if not relevant:
+        print("I don't have enough product evidence to answer that.")
+        return
+
+    context = "\n".join(match.text for match in relevant)
+    answer = await rag_agent.run(
+        f"Use only this retrieved evidence:\n{context}\n\nQuestion: {question}"
+    )
+    print(answer.output)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { generateText } from "ai"
+import { openai } from "@ai-sdk/openai"
+
+type Match = { text: string; score: number }
+
+class InMemoryVectorStore {
+  constructor(private readonly docs: string[]) {}
+
+  async search({ query, topK }: { query: string; topK: number }): Promise&lt;Match[]&gt; {
+    const queryTerms = new Set(query.toLowerCase().split(/\s+/))
+    const scored = this.docs.map((text) =&gt; {
+      const docTerms = new Set(text.toLowerCase().split(/\s+/))
+      const overlap = [...queryTerms].filter((term) =&gt; docTerms.has(term)).length
+      return { text, score: overlap / Math.max(queryTerms.size, 1) }
+    })
+    return scored.sort((a, b) =&gt; b.score - a.score).slice(0, topK)
+  }
+}
+
+const vectorStore = new InMemoryVectorStore([
+  "ISA withdrawals may be restricted during a fixed term.",
+  "Instant access accounts allow withdrawals without notice.",
+  "Portfolio simulations require consent and a complete risk profile.",
+])
+
+const MIN_RELEVANCE = 0.35
+
+async function answerQuestion(question: string): Promise&lt;string&gt; {
+  const matches = await vectorStore.search({ query: question, topK: 3 })
+  const relevant = matches.filter((match) =&gt; match.score &gt;= MIN_RELEVANCE)
+  if (relevant.length === 0) return "I don't have enough product evidence to answer that."
+
+  const context = relevant.map((match) =&gt; match.text).join("\n")
+  const { text } = await generateText({
+    model: openai("gpt-4o"),
+    prompt: `Use only this retrieved evidence:\n${context}\n\nQuestion: ${question}`,
+  })
+  return text
+}
+
+answerQuestion("Can I withdraw early from a fixed-term ISA?")
+  .then(console.log)
+  .catch(console.error)</code></pre></div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a vector search genuinely matches on meaning, not spelling — a question that never literally uses the word "frameworks" can still correctly retrieve a sentence about frameworks, something a classic exact-keyword search would miss entirely.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> gathers approved evidence — catalogue rows through <code class="inline">queryCatalogue</code> and guidance passages through <code class="inline">lookupGuidance</code> — before wording claims about rates, maturity terms or deposit protection. When no suitable passage is found, the turn does not compose from nothing; it steps down towards a person. Part X adds the citation check this lesson leaves open: the verifier requires every claim to cite evidence ids that exist in the frozen bundle.</div>
+  </article>
+
+  <!-- LESSON 5 -->
+  <article class="lesson" id="lesson-5">
+    <span class="lesson-tag">Lesson 5</span>
+    <h3>Branching Agent Workflows with Shared State</h3>
+    <div class="problem"><b>The problem:</b> Eunomia and Skill Reporter should not run every request through one identical path. Request intent and risk differ sharply: routine explanations, account-scoped retrieval, ISA-rule questions, and simulation requests need different controls. A single linear flow increases cost, latency, and policy risk in both domains. The real problem is deciding the next operational step from state, not just generating text.</div>
+
+    <blockquote>The real problem is deciding the next operational step from state, not just generating text. The role of the graph is to make that control flow explicit: it owns step order, branch rules, and state updates. LLMs still do useful work inside steps (for example, extracting entities and intent from the customer question), but they do not directly decide control flow.</blockquote>
+
+    <p>If control flow stays implicit inside one model prompt, planning, tool use, retrieval, guardrails, and human approval can blur into one opaque step. Then teams cannot clearly answer why a request took a specific path, why a safety gate was skipped, or why a risky action was attempted. The graph fixes that by turning routing into an explicit, auditable system decision.</p>
+
+    <p>The fix is a <span class="jargon">stateful</span> workflow (one that remembers shared values as it runs) with <span class="jargon">conditional routing</span> (choosing the next path from those values). A <span class="jargon">graph</span> connects each <span class="jargon">node</span> (one processing step) through an <span class="jargon">edge</span> (a path to another step). The graph checks its <span class="jargon">state</span> (the shared notebook of current values) and chooses which node runs next — built here with <span class="jargon">LangGraph</span> (a library family for branching, stateful AI workflows; this lesson uses Python and TypeScript variants).</p>
+
+    <p>Libraries used in this lesson: Python uses <code class="inline">langgraph</code> for graph routing and Python's built-in <code class="inline">typing</code> module for a clear state shape. TypeScript uses <code class="inline">@langchain/langgraph</code> for the same graph routing pattern. The small examples below now include imports so you can see exactly where <code class="inline">StateGraph</code> comes from.</p>
+
+    <p><b>When the next step depends on what we already know, use a graph:</b> think of the graph as a traffic controller. It reads the current state and sends each request to the right lane. For example, an interest question goes to the interest lane, a product-rule question goes to the policy lane, and a simulation request goes to the simulation lane. The model can still help inside each lane (for extraction or wording), but the graph owns the route, so behavior stays predictable, testable, and easy to audit.</p>
+
+    <p><b>How the agent uses the graph at run time:</b> (1) the agent receives a query and stores it in state, (2) it runs <code class="inline">extract_skill_node</code> to pull out one skill name, (3) it runs <code class="inline">evaluate_demand_node</code> to set <code class="inline">demand_level</code> (<code class="inline">demandLevel</code> in TypeScript), and (4) the graph routes to exactly one final node based on that value. The graph is the step-order engine for the agent.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 260">
+        <defs><marker id="ah5" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+
+        <rect x="30" y="100" width="160" height="60" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="110" y="125" fill="white" font-size="12" font-weight="600" text-anchor="middle">extract_skill_node</text>
+        <text x="110" y="143" fill="#94a3b8" font-size="9" text-anchor="middle">(AI call)</text>
+
+        <line x1="190" y1="130" x2="248" y2="130" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah5)"/>
+
+        <rect x="250" y="100" width="180" height="60" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="340" y="122" fill="white" font-size="12" font-weight="600" text-anchor="middle">evaluate_demand_node</text>
+        <text x="340" y="140" fill="#94a3b8" font-size="9" text-anchor="middle">(plain code, no AI call)</text>
+
+        <path d="M 430 115 Q 480 70 560 90" fill="none" stroke="#34d399" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah5)"/>
+        <text x="500" y="70" fill="#34d399" font-size="9" text-anchor="middle">HIGH_DEMAND</text>
+
+        <path d="M 430 150 Q 480 195 560 175" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah5)"/>
+        <text x="500" y="200" fill="#fb7185" font-size="9" text-anchor="middle">STANDARD_DEMAND</text>
+
+        <rect x="560" y="55" width="190" height="60" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="655" y="78" fill="white" font-size="11" font-weight="600" text-anchor="middle">high_priority_evaluator</text>
+        <text x="655" y="95" fill="#94a3b8" font-size="9" text-anchor="middle">priority-track report</text>
+
+        <rect x="560" y="140" width="190" height="60" rx="8" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="655" y="163" fill="white" font-size="11" font-weight="600" text-anchor="middle">standard_evaluator</text>
+        <text x="655" y="180" fill="#94a3b8" font-size="9" text-anchor="middle">backlog report</text>
+      </svg>
+      <p class="diagram-caption">AI EXTRACTS SKILL → PLAIN CODE CHECKS A FIXED LIST → GRAPH BRANCHES LIVE: priority path OR standard path, never both</p>
+    </div>
+
+    <blockquote>Not every decision needs an AI call. <code class="inline">evaluate_demand_node</code> never touches the model — a simple list-membership check is faster, free, and literally cannot hallucinate. Reaching for an AI call here would be slower for zero benefit.</blockquote>
+
+    <p>Here is the full branching wiring in one place. <code class="inline">StateGraph</code> is LangGraph's workflow builder object: it holds your state shape, your nodes, and your routing rules. First, <code class="inline">evaluate_demand_node</code> writes <code class="inline">demand_level</code> (<code class="inline">demandLevel</code> in TypeScript) into shared state. Next, the routing function reads that value. Finally, the map tells the graph which node to run for each possible value.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+from typing import Literal, TypedDict
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import END, StateGraph
+
+
+class GraphState(TypedDict):
+    job_query: str
+    identified_skill: str
+    demand_level: str
+    final_report: str
+
+
+async def extract_skill_node(state: GraphState) -> dict[str, str]:
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    response = await llm.ainvoke(
+        [
+            SystemMessage(
+                content="Extract the primary technical skill name from the user's job query. Reply with only the skill name."
+            ),
+            HumanMessage(content=state["job_query"]),
+        ]
+    )
+    return {"identified_skill": str(response.content).strip()}
+
+
+async def evaluate_demand_node(state: GraphState) -> dict[str, str]:
+    skill = state["identified_skill"].lower()
+    target_stack = ["langgraph", "pydantic", "vercel ai", "llamaindex"]
+    demand = "HIGH_DEMAND" if any(target in skill for target in target_stack) else "STANDARD_DEMAND"
+    return {"demand_level": demand}
+
+
+async def high_priority_evaluator(state: GraphState) -> dict[str, str]:
+    return {
+        "final_report": f"PRIORITY TRACK: '{state['identified_skill']}' is a high-demand core skill."
+    }
+
+
+async def standard_evaluator(state: GraphState) -> dict[str, str]:
+    return {"final_report": f"STANDARD TRACK: Identified skill '{state['identified_skill']}'."}
+
+
+def route_by_demand(state: GraphState) -> Literal["high_priority_evaluator", "standard_evaluator"]:
+    return "high_priority_evaluator" if state["demand_level"] == "HIGH_DEMAND" else "standard_evaluator"
+
+
+# Runtime flow:
+# 1) Agent receives a query in state["job_query"].
+# 2) extract_skill_node writes state["identified_skill"].
+# 3) evaluate_demand_node writes state["demand_level"].
+# 4) route_by_demand picks exactly one final evaluator node.
+builder = StateGraph(GraphState)
+builder.add_node("extract_skill_node", extract_skill_node)
+builder.add_node("evaluate_demand_node", evaluate_demand_node)
+builder.add_node("high_priority_evaluator", high_priority_evaluator)
+builder.add_node("standard_evaluator", standard_evaluator)
+builder.set_entry_point("extract_skill_node")
+builder.add_edge("extract_skill_node", "evaluate_demand_node")
+builder.add_conditional_edges(
+    "evaluate_demand_node",
+    route_by_demand,
+    {
+        "high_priority_evaluator": "high_priority_evaluator",
+        "standard_evaluator": "standard_evaluator",
+    },
+)
+builder.add_edge("high_priority_evaluator", END)
+builder.add_edge("standard_evaluator", END)
+graph = builder.compile()
+
+
+async def main() -> None:
+    final_output = await graph.ainvoke(
+        {
+            "job_query": "Senior AI role requiring expertise in LangGraph.",
+            "identified_skill": "",
+            "demand_level": "",
+            "final_report": "",
+        }
+    )
+    print(final_output["final_report"])
+
+
+if __name__ == "__main__":
+    asyncio.run(main())</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import "dotenv/config"
+import { openai } from "@ai-sdk/openai"
+import { generateText } from "ai"
+import { END, START, StateGraph, StateSchema } from "@langchain/langgraph"
+import * as z from "zod"
+
+const MarketState = new StateSchema({
+  jobQuery: z.string(),
+  identifiedSkill: z.string(),
+  demandLevel: z.string(),
+  finalReport: z.string(),
+})
+
+async function extractSkillNode(state: typeof MarketState.State) {
+  const { text } = await generateText({
+    model: openai("gpt-4o"),
+    system: "Extract the primary technical skill name from the user's job query. Reply with only the skill name.",
+    prompt: state.jobQuery,
+  })
+  return { identifiedSkill: text.trim() }
+}
+
+async function evaluateDemandNode(state: typeof MarketState.State) {
+  const skill = state.identifiedSkill.toLowerCase()
+  const targetStack = ["langgraph", "pydantic", "vercel ai", "llamaindex"]
+  const demand = targetStack.some((target) => skill.includes(target)) ? "HIGH_DEMAND" : "STANDARD_DEMAND"
+  return { demandLevel: demand }
+}
+
+async function highPriorityEvaluator(state: typeof MarketState.State) {
+  return { finalReport: `PRIORITY TRACK: '${state.identifiedSkill}' is a high-demand core skill.` }
+}
+
+async function standardEvaluator(state: typeof MarketState.State) {
+  return { finalReport: `STANDARD TRACK: Identified skill '${state.identifiedSkill}'.` }
+}
+
+function routeByDemand(
+  state: typeof MarketState.State,
+): "highPriorityEvaluator" | "standardEvaluator" {
+  return state.demandLevel === "HIGH_DEMAND" ? "highPriorityEvaluator" : "standardEvaluator"
+}
+
+// Runtime flow:
+// 1) Agent receives a query in state.jobQuery.
+// 2) extractSkillNode writes state.identifiedSkill.
+// 3) evaluateDemandNode writes state.demandLevel.
+// 4) routeByDemand picks exactly one final evaluator node.
+const graph = new StateGraph(MarketState)
+  .addNode("extractSkillNode", extractSkillNode)
+  .addNode("evaluateDemandNode", evaluateDemandNode)
+  .addNode("highPriorityEvaluator", highPriorityEvaluator)
+  .addNode("standardEvaluator", standardEvaluator)
+  .addEdge(START, "extractSkillNode")
+  .addEdge("extractSkillNode", "evaluateDemandNode")
+  .addConditionalEdges("evaluateDemandNode", routeByDemand, {
+    highPriorityEvaluator: "highPriorityEvaluator",
+    standardEvaluator: "standardEvaluator",
+  })
+  .addEdge("highPriorityEvaluator", END)
+  .addEdge("standardEvaluator", END)
+  .compile()
+
+async function main() {
+  const finalOutput = await graph.invoke({
+    jobQuery: "Senior AI role requiring expertise in LangGraph.",
+    identifiedSkill: "",
+    demandLevel: "",
+    finalReport: "",
+  })
+  console.log(finalOutput.finalReport)
+}
+
+main().catch(console.error)</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 980 300">
+        <defs><marker id="ah5-fin" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+
+        <rect x="30" y="120" width="190" height="60" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="125" y="145" fill="white" font-size="11" font-weight="600" text-anchor="middle">classify_request_node</text>
+        <text x="125" y="162" fill="#94a3b8" font-size="9" text-anchor="middle">intent + next_route</text>
+
+        <line x1="220" y1="150" x2="330" y2="90" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah5-fin)"/>
+        <text x="280" y="85" fill="#34d399" font-size="9" text-anchor="middle">monthly_interest</text>
+        <line x1="220" y1="150" x2="330" y2="150" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah5-fin)"/>
+        <text x="280" y="140" fill="#fbbf24" font-size="9" text-anchor="middle">product_rules</text>
+        <line x1="220" y1="150" x2="330" y2="210" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah5-fin)"/>
+        <text x="280" y="228" fill="#a78bfa" font-size="9" text-anchor="middle">portfolio_simulation</text>
+
+        <rect x="330" y="60" width="170" height="50" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="415" y="90" fill="white" font-size="10" text-anchor="middle">interest_node</text>
+
+        <rect x="330" y="125" width="170" height="50" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="415" y="155" fill="white" font-size="10" text-anchor="middle">product_rules_node</text>
+
+        <rect x="330" y="190" width="170" height="50" rx="8" fill="rgba(76,29,149,0.35)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="415" y="220" fill="white" font-size="10" text-anchor="middle">simulation_gate_node</text>
+
+        <line x1="500" y1="215" x2="620" y2="180" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah5-fin)"/>
+        <text x="560" y="172" fill="#22d3ee" font-size="9" text-anchor="middle">consent + risk profile</text>
+        <line x1="500" y1="215" x2="620" y2="235" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah5-fin)"/>
+        <text x="560" y="252" fill="#fb7185" font-size="9" text-anchor="middle">missing data</text>
+
+        <rect x="620" y="155" width="180" height="50" rx="8" fill="rgba(6,78,59,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="710" y="185" fill="white" font-size="10" text-anchor="middle">simulation_node</text>
+
+        <rect x="620" y="220" width="180" height="50" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="710" y="250" fill="white" font-size="10" text-anchor="middle">advisor_review_node</text>
+      </svg>
+      <p class="diagram-caption">CLASSIFY REQUEST → INTEREST / RULES / SIMULATION GATE → RUN SIMULATION ONLY WITH CONSENT + RISK PROFILE, ELSE ADVISOR REVIEW</p>
+    </div>
+
+    <p><b>Second scenario (fintech request routing):</b> we now apply the same graph pattern to concrete customer questions: "How much interest did I earn this month on my instant access account?", "What is my notice period?", "Can I withdraw early from a fixed-term ISA?", and "Run a portfolio optimization simulation." These questions should not share one blind path. The graph routes each one to the right branch, and the simulation branch only proceeds when both consent and risk profile are present; otherwise it routes to advisor review.</p>
+
+    <p><b>Putting Lesson 4 and Lesson 5 together:</b> use the graph as the control-flow engine and use RAG as one branch tool. In practice, a <code class="inline">classify_intent_node</code> labels each question as <code class="inline">faq</code>, <code class="inline">account_data</code>, <code class="inline">mixed</code>, or <code class="inline">unclear</code>, plus a confidence score.</p>
+    <ul>
+      <li><code class="inline">faq</code> → <code class="inline">faq_rag_node</code> (retrieve policy/docs evidence and answer with citations). Example: "What is the early-withdrawal rule on a fixed-term ISA?" returns a policy answer with document references.</li>
+      <li><code class="inline">account_data</code> → <code class="inline">auth_check_node</code> → <code class="inline">account_data_lookup_node</code>. Example: "How much interest did I earn last month on my Instant Saver?" requires customer authentication and account-level lookup.</li>
+      <li><code class="inline">mixed</code> → split handling: policy via RAG + account consequence via authenticated lookup. Example: "If I move £5,000 from my Easy Access account into a fixed-term ISA today, what penalty rule applies and how would that affect my current month interest?" combines policy rules with personal account impact.</li>
+      <li><code class="inline">unclear</code> → <code class="inline">clarification_node</code>. Example: "Can I do that transfer now?" is ambiguous, so the assistant asks what transfer, which account, and whether the question is policy-only or account-specific.</li>
+    </ul>
+    <p><b>FAQ vs account-data routing rule:</b> account signals include personal scope and identifiers (for example "my balance", "my account", reference numbers, "this month for me"). FAQ signals are general policy/how-to/eligibility questions that can be answered from docs without user-record access.</p>
+    <p><b>Ambiguity rule:</b> if confidence is below threshold, ask one clarifier: "Are you asking about general policy, or your specific account details?" In high-risk cases, default to the account-data path rather than guessing.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from typing import Literal, TypedDict
+
+from langgraph.graph import END, StateGraph
+
+
+class FinState(TypedDict):
+    question: str
+    is_authenticated: bool
+    risk_profile_complete: bool
+    simulation_consent: bool
+    intent: str
+    next_route: str
+    answer: str
+
+
+def classify_intent_node(state: FinState) -> dict[str, str]:
+    q = state["question"].lower()
+
+    account_signals = any(token in q for token in ["my", "account", "balance", "this month", "earned"])
+    faq_signals = any(token in q for token in ["policy", "notice period", "fixed-term", "isa", "how do i", "eligibility"])
+    simulation_signals = any(token in q for token in ["simulation", "optimiz", "projection"])
+
+    if simulation_signals:
+        return {"intent": "portfolio_simulation", "next_route": "simulation_gate_node"}
+    if account_signals and faq_signals:
+        return {"intent": "mixed", "next_route": "split_and_answer_node"}
+    if account_signals:
+        return {"intent": "account_data", "next_route": "auth_check_node"}
+    if faq_signals:
+        return {"intent": "faq", "next_route": "faq_rag_node"}
+    return {"intent": "unclear", "next_route": "clarification_node"}
+
+
+def faq_rag_node(_state: FinState) -> dict[str, str]:
+    return {
+        "answer": "FAQ answer from policy evidence: fixed-term ISA withdrawals may carry restrictions. [Policy KB §3.1]"
+    }
+
+
+def auth_check_node(state: FinState) -> dict[str, str]:
+    return {"next_route": "account_data_lookup_node" if state["is_authenticated"] else "verification_required_node"}
+
+
+def account_data_lookup_node(_state: FinState) -> dict[str, str]:
+    return {"answer": "Account answer: you earned £42.18 interest this month on your instant access account."}
+
+
+def split_and_answer_node(_state: FinState) -> dict[str, str]:
+    return {
+        "answer": "Mixed answer: policy says early fixed-term ISA withdrawal is restricted; your account-specific outcome needs authenticated lookup."
+    }
+
+
+def clarification_node(_state: FinState) -> dict[str, str]:
+    return {"answer": "Are you asking about general policy, or your specific account details?"}
+
+
+def simulation_gate_node(state: FinState) -> dict[str, str]:
+    if state["risk_profile_complete"] and state["simulation_consent"]:
+        return {"next_route": "simulation_node"}
+    return {"next_route": "advisor_review_node"}
+
+
+def simulation_node(_state: FinState) -> dict[str, str]:
+    return {"answer": "Simulation answer: projected 12-month range generated from your risk profile."}
+
+
+def advisor_review_node(_state: FinState) -> dict[str, str]:
+    return {"answer": "Simulation paused: missing consent or risk profile. Routed to advisor review."}
+
+
+def verification_required_node(_state: FinState) -> dict[str, str]:
+    return {"answer": "Please verify your identity to access account-specific data."}
+
+
+def route_by_next(state: FinState) -> Literal[
+    "faq_rag_node",
+    "auth_check_node",
+    "split_and_answer_node",
+    "clarification_node",
+    "simulation_gate_node",
+    "account_data_lookup_node",
+    "verification_required_node",
+    "simulation_node",
+    "advisor_review_node",
+]:
+    return state["next_route"]
+
+
+graph_builder = StateGraph(FinState)
+graph_builder.add_node("classify_intent_node", classify_intent_node)
+graph_builder.add_node("faq_rag_node", faq_rag_node)
+graph_builder.add_node("auth_check_node", auth_check_node)
+graph_builder.add_node("account_data_lookup_node", account_data_lookup_node)
+graph_builder.add_node("split_and_answer_node", split_and_answer_node)
+graph_builder.add_node("clarification_node", clarification_node)
+graph_builder.add_node("simulation_gate_node", simulation_gate_node)
+graph_builder.add_node("simulation_node", simulation_node)
+graph_builder.add_node("advisor_review_node", advisor_review_node)
+graph_builder.add_node("verification_required_node", verification_required_node)
+graph_builder.set_entry_point("classify_intent_node")
+
+graph_builder.add_conditional_edges(
+    "classify_intent_node",
+    route_by_next,
+    {
+        "faq_rag_node": "faq_rag_node",
+        "auth_check_node": "auth_check_node",
+        "split_and_answer_node": "split_and_answer_node",
+        "clarification_node": "clarification_node",
+        "simulation_gate_node": "simulation_gate_node",
+    },
+)
+
+graph_builder.add_conditional_edges(
+    "auth_check_node",
+    route_by_next,
+    {
+        "account_data_lookup_node": "account_data_lookup_node",
+        "verification_required_node": "verification_required_node",
+    },
+)
+
+graph_builder.add_conditional_edges(
+    "simulation_gate_node",
+    route_by_next,
+    {
+        "simulation_node": "simulation_node",
+        "advisor_review_node": "advisor_review_node",
+    },
+)
+
+graph_builder.add_edge("faq_rag_node", END)
+graph_builder.add_edge("account_data_lookup_node", END)
+graph_builder.add_edge("split_and_answer_node", END)
+graph_builder.add_edge("clarification_node", END)
+graph_builder.add_edge("simulation_node", END)
+graph_builder.add_edge("advisor_review_node", END)
+graph_builder.add_edge("verification_required_node", END)
+
+fin_graph = graph_builder.compile()</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { END, START, StateGraph, StateSchema } from "@langchain/langgraph"
+import * as z from "zod"
+
+const FinState = new StateSchema({
+  question: z.string(),
+  isAuthenticated: z.boolean(),
+  riskProfileComplete: z.boolean(),
+  simulationConsent: z.boolean(),
+  intent: z.string(),
+  nextRoute: z.string(),
+  answer: z.string(),
+})
+
+type Route =
+  | "faqRagNode"
+  | "authCheckNode"
+  | "splitAndAnswerNode"
+  | "clarificationNode"
+  | "simulationGateNode"
+  | "accountDataLookupNode"
+  | "verificationRequiredNode"
+  | "simulationNode"
+  | "advisorReviewNode"
+
+function classifyIntentNode(state: typeof FinState.State) {
+  const q = state.question.toLowerCase()
+
+  const accountSignals = ["my", "account", "balance", "this month", "earned"].some((token) => q.includes(token))
+  const faqSignals = ["policy", "notice period", "fixed-term", "isa", "how do i", "eligibility"].some((token) =>
+    q.includes(token),
+  )
+  const simulationSignals = ["simulation", "optimiz", "projection"].some((token) => q.includes(token))
+
+  if (simulationSignals) return { intent: "portfolio_simulation", nextRoute: "simulationGateNode" }
+  if (accountSignals && faqSignals) return { intent: "mixed", nextRoute: "splitAndAnswerNode" }
+  if (accountSignals) return { intent: "account_data", nextRoute: "authCheckNode" }
+  if (faqSignals) return { intent: "faq", nextRoute: "faqRagNode" }
+  return { intent: "unclear", nextRoute: "clarificationNode" }
+}
+
+function faqRagNode() {
+  return { answer: "FAQ answer from policy evidence: fixed-term ISA withdrawals may carry restrictions. [Policy KB §3.1]" }
+}
+
+function authCheckNode(state: typeof FinState.State) {
+  return { nextRoute: state.isAuthenticated ? "accountDataLookupNode" : "verificationRequiredNode" }
+}
+
+function accountDataLookupNode() {
+  return { answer: "Account answer: you earned £42.18 interest this month on your instant access account." }
+}
+
+function splitAndAnswerNode() {
+  return {
+    answer:
+      "Mixed answer: policy says early fixed-term ISA withdrawal is restricted; your account-specific outcome needs authenticated lookup.",
+  }
+}
+
+function clarificationNode() {
+  return { answer: "Are you asking about general policy, or your specific account details?" }
+}
+
+function simulationGateNode(state: typeof FinState.State) {
+  return { nextRoute: state.riskProfileComplete && state.simulationConsent ? "simulationNode" : "advisorReviewNode" }
+}
+
+function simulationNode() {
+  return { answer: "Simulation answer: projected 12-month range generated from your risk profile." }
+}
+
+function advisorReviewNode() {
+  return { answer: "Simulation paused: missing consent or risk profile. Routed to advisor review." }
+}
+
+function verificationRequiredNode() {
+  return { answer: "Please verify your identity to access account-specific data." }
+}
+
+function routeByNext(state: typeof FinState.State): Route {
+  return state.nextRoute as Route
+}
+
+const finGraph = new StateGraph(FinState)
+  .addNode("classifyIntentNode", classifyIntentNode)
+  .addNode("faqRagNode", faqRagNode)
+  .addNode("authCheckNode", authCheckNode)
+  .addNode("accountDataLookupNode", accountDataLookupNode)
+  .addNode("splitAndAnswerNode", splitAndAnswerNode)
+  .addNode("clarificationNode", clarificationNode)
+  .addNode("simulationGateNode", simulationGateNode)
+  .addNode("simulationNode", simulationNode)
+  .addNode("advisorReviewNode", advisorReviewNode)
+  .addNode("verificationRequiredNode", verificationRequiredNode)
+  .addEdge(START, "classifyIntentNode")
+  .addConditionalEdges("classifyIntentNode", routeByNext, {
+    faqRagNode: "faqRagNode",
+    authCheckNode: "authCheckNode",
+    splitAndAnswerNode: "splitAndAnswerNode",
+    clarificationNode: "clarificationNode",
+    simulationGateNode: "simulationGateNode",
+  })
+  .addConditionalEdges("authCheckNode", routeByNext, {
+    accountDataLookupNode: "accountDataLookupNode",
+    verificationRequiredNode: "verificationRequiredNode",
+  })
+  .addConditionalEdges("simulationGateNode", routeByNext, {
+    simulationNode: "simulationNode",
+    advisorReviewNode: "advisorReviewNode",
+  })
+  .addEdge("faqRagNode", END)
+  .addEdge("accountDataLookupNode", END)
+  .addEdge("splitAndAnswerNode", END)
+  .addEdge("clarificationNode", END)
+  .addEdge("simulationNode", END)
+  .addEdge("advisorReviewNode", END)
+  .addEdge("verificationRequiredNode", END)
+  .compile()</code></pre></div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> each node returns only the fields it changed, and the graph engine merges that update into shared state. In TypeScript, a narrow return type such as <code class="inline">Pick&lt;typeof MarketState.State, "demandLevel"&gt;</code> lets a <span class="jargon">type-checker</span> (a tool that checks declared types before the program runs) reject updates to unrelated state fields. Python needs an equivalent narrow return model if the same ownership check is required there.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> this branching pattern becomes <b>Eunomia</b>'s routing policy: a classifier gives each message a typed question type and a confidence score, and a reviewed, versioned table maps it to a starting answer step — a template, a composed answer from catalogue or guidance evidence, or an immediate hand-off to a person. Low confidence goes straight to a person. The branch is chosen per message, but by a table that is tested and released like code, not improvised.</div>
+  </article>
+
+</section>

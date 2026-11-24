@@ -1,0 +1,1313 @@
+<section class="part" id="part-7">
+  <div class="part-header">
+    <div class="part-eyebrow">Part VII</div>
+    <h2>Observability &amp; Evaluation</h2>
+    <p class="part-intro">A production agent needs more than a convincing demo. The team must be able to reconstruct every request, measure answer quality repeatedly, block harmful regressions, and prove that the whole customer journey still works. This part turns those needs into connected traces, versioned evaluations, browser tests, and trustworthy delivery gates for both Python and TypeScript.</p>
+    <div class="reader-note">
+      <p><b>Dual-domain map for this part:</b> the same observability and eval controls apply to Eunomia and Skill Reporter.</p>
+      <ul>
+        <li><b>Eunomia domain:</b> end-to-end traces, versioned eval datasets, judge-model scoring, CI quality gates, browser journey checks, monorepo contract integrity, and baseline-artifact regression gating.</li>
+        <li><b>Skill Reporter domain:</b> the same trace, eval, judge, CI, browser, monorepo, and baseline-gating controls for report-generation flows.</li>
+      </ul>
+      <p><b>Interlink chain:</b> Lesson <a href="#lesson-7">7</a> provides trace evidence, Lessons <a href="#lesson-10">10</a> and <a href="#lesson-39">39</a> define and score eval quality, Lessons <a href="#lesson-47">47</a> and <a href="#lesson-48">48</a> enforce CI and browser evidence, Lesson <a href="#lesson-53">53</a> aligns repo-wide contracts, and Lesson <a href="#lesson-56">56</a> protects baselines from regression drift.</p>
+    </div>
+  </div>
+
+  <!-- LESSON 7 -->
+  <article class="lesson" id="lesson-7">
+    <span class="lesson-tag">Lesson 7</span>
+    <h3>OpenTelemetry &amp; Agent Tracing</h3>
+    <div class="problem"><b>The problem:</b> when Eunomia returns a slow, incorrect, or surprising savings answer, teams need to know exactly which model and tool steps ran and where delay or error started. Plain logs rarely reconstruct that full execution path. Skill Reporter has the same blind spot when report outputs are late or wrong and the team cannot trace where the pipeline diverged.</div>
+
+    <p><span class="jargon">OpenTelemetry</span> (a shared standard for creating and exporting operational records from software) gives the request a structured history. A <span class="jargon">trace</span> (the complete structured record of one request as it moves through a system) begins at the incoming API call. Inside it, each <span class="jargon">span</span> (one timed operation inside a trace, such as a model call or tool call) records a named piece of work, its duration, and whether it succeeded.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 300">
+        <defs><marker id="ah7" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="20" y="105" width="125" height="62" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="82" y="130" fill="white" font-size="11" font-weight="600" text-anchor="middle">Customer request</text>
+        <text x="82" y="148" fill="#94a3b8" font-size="9" text-anchor="middle">received · success</text>
+        <line x1="145" y1="136" x2="182" y2="136" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah7)"/>
+        <rect x="184" y="105" width="130" height="62" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="249" y="130" fill="white" font-size="11" font-weight="600" text-anchor="middle">API request span</text>
+        <text x="249" y="148" fill="#67e8f9" font-size="9" text-anchor="middle">1.42 s · success</text>
+        <line x1="314" y1="136" x2="351" y2="136" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah7)"/>
+        <rect x="353" y="105" width="128" height="62" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="417" y="130" fill="white" font-size="11" font-weight="600" text-anchor="middle">Agent run span</text>
+        <text x="417" y="148" fill="#c4b5fd" font-size="9" text-anchor="middle">1.31 s · success</text>
+        <rect x="505" y="52" width="395" height="170" rx="12" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="5,4"/>
+        <text x="522" y="74" fill="#94a3b8" font-size="10">One trace · child spans in execution order</text>
+        <line x1="481" y1="136" x2="528" y2="136" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah7)"/>
+        <rect x="530" y="103" width="105" height="66" rx="7" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="582" y="127" fill="white" font-size="10" font-weight="600" text-anchor="middle">Model call span</text>
+        <text x="582" y="146" fill="#fbbf24" font-size="8" text-anchor="middle">620 ms · success</text>
+        <line x1="635" y1="136" x2="659" y2="136" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah7)"/>
+        <rect x="661" y="103" width="110" height="66" rx="7" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="716" y="124" fill="white" font-size="9" font-weight="600" text-anchor="middle">Savings-data</text>
+        <text x="716" y="137" fill="white" font-size="9" font-weight="600" text-anchor="middle">tool span</text>
+        <text x="716" y="153" fill="#34d399" font-size="8" text-anchor="middle">84 ms · success</text>
+        <line x1="771" y1="136" x2="795" y2="136" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah7)"/>
+        <rect x="797" y="103" width="88" height="66" rx="7" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="841" y="123" fill="white" font-size="9" font-weight="600" text-anchor="middle">Final model</text>
+        <text x="841" y="136" fill="white" font-size="9" font-weight="600" text-anchor="middle">call span</text>
+        <text x="841" y="153" fill="#fb7185" font-size="8" text-anchor="middle">570 ms · success</text>
+        <line x1="900" y1="136" x2="930" y2="136" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah7)"/>
+        <rect x="932" y="78" width="140" height="52" rx="7" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="1002" y="109" fill="white" font-size="10" font-weight="600" text-anchor="middle">Trace exporter</text>
+        <line x1="1002" y1="130" x2="1002" y2="176" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah7)"/>
+        <rect x="932" y="180" width="140" height="52" rx="7" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="1002" y="202" fill="white" font-size="10" font-weight="600" text-anchor="middle">Trace store</text>
+        <text x="1002" y="217" fill="#94a3b8" font-size="8" text-anchor="middle">for inspection</text>
+      </svg>
+      <p class="diagram-caption">CUSTOMER REQUEST → API SPAN → AGENT SPAN → ORDERED MODEL AND TOOL CHILD SPANS → EXPORTER → INSPECTABLE TRACE STORE</p>
+    </div>
+
+    <p>The parent agent span owns child spans for the first model call, the savings-data lookup, and the final model call. Each span can carry safe operational details such as the operation name, model or tool name, elapsed time, and success state. It should not carry the customer's message, account number, balance, or any other private value. The completed trace must be inspected, not merely emitted, to confirm that its parent-child links match the order that really ran.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from collections.abc import Awaitable, Callable
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+
+tracer = trace.get_tracer("eunomia.agent")
+
+async def run_agent(call_tool: Callable[[], Awaitable[str]]) -&gt; str:
+    with tracer.start_as_current_span("agent.run") as agent_span:
+        agent_span.set_attribute("agent.version", "savings-v3")
+        with tracer.start_as_current_span("tool.savings_lookup") as tool_span:
+            try:
+                result = await call_tool()
+            except Exception as exc:
+                tool_span.set_attribute("tool.success", False)
+                tool_span.record_exception(exc)
+                tool_span.set_status(Status(StatusCode.ERROR))
+                raise
+            tool_span.set_attribute("tool.success", True)
+        return result</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { SpanStatusCode, trace } from "@opentelemetry/api";
+
+const tracer = trace.getTracer("eunomia.agent");
+
+export async function runAgent(
+  callTool: () =&gt; Promise&lt;string&gt;,
+): Promise&lt;string&gt; {
+  return tracer.startActiveSpan("agent.run", async (agentSpan) =&gt; {
+    agentSpan.setAttribute("agent.version", "savings-v3");
+    try {
+      return await tracer.startActiveSpan("tool.savings_lookup", async (toolSpan) =&gt; {
+        try {
+          const result = await callTool();
+          toolSpan.setAttribute("tool.success", true);
+          return result;
+        } catch (error) {
+          toolSpan.setAttribute("tool.success", false);
+          toolSpan.setStatus({ code: SpanStatusCode.ERROR });
+          if (error instanceof Error) toolSpan.recordException(error);
+          throw error;
+        } finally {
+          toolSpan.end();
+        }
+      });
+    } finally {
+      agentSpan.end();
+    }
+  });
+}</code></pre></div>
+
+    <p><span class="jargon">Context propagation</span> (passing the trace identity from one operation to the next so related spans remain connected) matters when work crosses an <span class="jargon">asynchronous boundary</span> (a point where work pauses or continues in another task). Python and TypeScript can export the same trace shape, but their libraries may manage the current span differently while work is paused and resumed. A test must therefore prove that later tool work remains beneath the correct request rather than assuming it does.</p>
+
+    <blockquote>Tracing is diagnostic support, not part of the customer's transaction. Use an asynchronous batch exporter with a bounded queue and timeout; if capacity is exhausted or export fails, drop or report telemetry separately rather than blocking the customer request.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> side-by-side Python and TypeScript implementations can both show successful tool spans while one language has silently disconnected those spans from the parent request during asynchronous work. Explicit context-propagation checks are required; a green tool span alone proves only that the tool ran.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> will use OpenTelemetry to connect every API request, model call, and capability call into one inspectable trace across its <span class="jargon">monorepo</span> (one repository containing the service, its quality checks, its probes and its web client). Skill Reporter will publish the same trace shape so cross-domain investigations use one workflow.</div>
+  </article>
+
+  <!-- LESSON 10 -->
+  <article class="lesson" id="lesson-10">
+    <span class="lesson-tag">Lesson 10</span>
+    <h3>Evaluation-Driven Development</h3>
+    <div class="problem"><b>The problem:</b> Eunomia can look convincing in demos while still failing common, ambiguous, or risk-sensitive customer requests. Without versioned expectations, prompt and policy tweaks become guesswork instead of measurable improvement. Skill Reporter has the same risk: report quality can drift silently unless every change is measured against saved evaluation cases.</div>
+
+    <p><span class="jargon">Evaluation-Driven Development, or EDD</span> (defining automated quality checks before or while building an AI feature) starts with user failures the team wants to prevent. Each desired behavior becomes an <span class="jargon">eval case</span> (one saved input with explicit criteria for judging the resulting answer): the input, facts that must appear, behavior that is forbidden, and a scoring rule an engineer can explain.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 330">
+        <defs><marker id="ah10" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <text x="25" y="35" fill="#94a3b8" font-size="10">DEFINE QUALITY</text>
+        <rect x="35" y="55" width="170" height="58" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="120" y="89" fill="white" font-size="11" font-weight="600" text-anchor="middle">Expected behavior</text>
+        <line x1="205" y1="84" x2="268" y2="84" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah10)"/>
+        <rect x="270" y="55" width="150" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="345" y="89" fill="white" font-size="11" font-weight="600" text-anchor="middle">Eval case</text>
+        <line x1="420" y1="84" x2="483" y2="84" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah10)"/>
+        <rect x="485" y="55" width="180" height="58" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="575" y="89" fill="white" font-size="11" font-weight="600" text-anchor="middle">Versioned dataset</text>
+        <text x="25" y="173" fill="#94a3b8" font-size="10">RUN AND COMPARE</text>
+        <path d="M 575 113 L 575 145 L 260 145 L 260 183" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah10)"/>
+        <path d="M 575 113 L 575 145 L 480 145 L 480 183" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah10)"/>
+        <rect x="175" y="185" width="170" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="260" y="219" fill="white" font-size="11" font-weight="600" text-anchor="middle">Python agent</text>
+        <rect x="395" y="185" width="170" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="480" y="219" fill="white" font-size="11" font-weight="600" text-anchor="middle">TypeScript agent</text>
+        <path d="M 345 214 L 635 214" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah10)"/>
+        <path d="M 565 214 L 635 214" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah10)"/>
+        <rect x="637" y="185" width="150" height="58" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="712" y="219" fill="white" font-size="11" font-weight="600" text-anchor="middle">Shared scorers</text>
+        <line x1="787" y1="214" x2="840" y2="214" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah10)"/>
+        <rect x="842" y="185" width="135" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="909" y="210" fill="white" font-size="10" font-weight="600" text-anchor="middle">Comparison</text>
+        <text x="909" y="226" fill="white" font-size="10" font-weight="600" text-anchor="middle">report</text>
+        <path d="M 909 243 Q 780 305 480 248" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah10)"/>
+        <path d="M 909 243 Q 650 325 260 248" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah10)"/>
+        <text x="675" y="294" fill="#fb7185" font-size="9" text-anchor="middle">Failures guide changes</text>
+      </svg>
+      <p class="diagram-caption">EXPECTED BEHAVIOR BECOMES A VERSIONED DATASET → BOTH AGENTS RUN THE SAME CASES → SHARED SCORERS PRODUCE ONE COMPARISON REPORT → FAILURES DRIVE THE NEXT CHANGE</p>
+    </div>
+
+    <p>A <span class="jargon">dataset</span> (a versioned collection of eval cases) should cover normal questions, ambiguous requests, unavailable tools, unsafe requests, and attempts to expose private information. The first cases should fail before the missing behavior is implemented. That failure proves the check can detect the problem; making it pass then becomes the feature's acceptance evidence.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class EvalCase:
+    prompt: str
+    required: tuple[str, ...]
+    forbidden: tuple[str, ...]
+
+def score(case: EvalCase, answer: str) -&gt; bool:
+    normalized = " ".join(answer.lower().split())
+    has_required = all(term.lower() in normalized for term in case.required)
+    has_forbidden = any(term.lower() in normalized for term in case.forbidden)
+    return has_required and not has_forbidden</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface EvalCase {
+  prompt: string;
+  required: string[];
+  forbidden: string[];
+}
+
+export function score(testCase: EvalCase, answer: string): boolean {
+  const normalized = answer.toLowerCase().trim().replace(/\s+/g, " ");
+  const hasRequired = testCase.required.every((term) =&gt;
+    normalized.includes(term.toLowerCase()),
+  );
+  const hasForbidden = testCase.forbidden.some((term) =&gt;
+    normalized.includes(term.toLowerCase()),
+  );
+  return hasRequired &amp;&amp; !hasForbidden;
+}</code></pre></div>
+
+    <p>A <span class="jargon">scorer</span> (code or a model that turns an answer into a result such as pass, fail, or a numeric score) should match the quality being measured. Required text, valid structure, and forbidden disclosures suit deterministic code. Clarity and relevance need judgment-based scoring. Both Python and TypeScript runners should receive identical cases and write a common report shape, while the readable case descriptions preserve the reason each test exists.</p>
+
+    <blockquote>An eval suite is a product specification written as executable examples. If nobody can explain why a case exists, its failure will not guide a useful change.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the same visible answer can receive different results across language runners when one trims whitespace, parses structured output, or treats a missing field differently. Shared report schemas and normalization rules must be tested as carefully as the agent behavior.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> will be developed against a versioned eval suite that defines acceptable savings guidance before each feature is considered complete. Skill Reporter will use the same versioned-suite discipline for report-quality expectations.</div>
+  </article>
+
+  <!-- LESSON 17 -->
+  <article class="lesson" id="lesson-17">
+    <span class="lesson-tag">Lesson 17</span>
+    <h3>Logfire &amp; Distributed Tracing</h3>
+    <div class="problem"><b>The problem:</b> one Eunomia request can cross browser, API, agent runtime, and savings tools. Service-local logs may all be correct yet still fail to show which records belong to the same customer interaction or where latency accumulated. Skill Reporter has the same cross-service visibility problem across UI, orchestration, and reporting components.</div>
+
+    <p>A <span class="jargon">distributed trace</span> (one connected record of a request that crosses multiple services or processes) extends the parent-child structure from Lesson 7 across network boundaries. Every service propagates the same <span class="jargon">trace ID</span> (the shared identifier that links all spans belonging to one request) as part of <span class="jargon">W3C Trace Context</span> (the standard HTTP headers used to connect tracing spans across services), usually in <code class="inline">traceparent</code>. Each hop creates a new span ID for its own work and forwards updated context. Browser-to-API propagation also requires tracing instrumentation and permission to send the cross-origin trace header.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 390">
+        <defs><marker id="ah17" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="35" y="45" width="150" height="60" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="110" y="80" fill="white" font-size="12" font-weight="600" text-anchor="middle">Frontend</text>
+        <rect x="285" y="45" width="150" height="60" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="360" y="80" fill="white" font-size="12" font-weight="600" text-anchor="middle">API</text>
+        <rect x="535" y="45" width="150" height="60" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="610" y="80" fill="white" font-size="12" font-weight="600" text-anchor="middle">Agent</text>
+        <rect x="785" y="45" width="170" height="60" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="870" y="80" fill="white" font-size="12" font-weight="600" text-anchor="middle">Savings tool</text>
+        <line x1="185" y1="75" x2="283" y2="75" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah17)"/>
+        <line x1="435" y1="75" x2="533" y2="75" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah17)"/>
+        <line x1="685" y1="75" x2="783" y2="75" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah17)"/>
+        <rect x="45" y="130" width="130" height="24" rx="5" fill="rgba(30,41,59,0.8)" stroke="#94a3b8"/><text x="110" y="146" fill="#94a3b8" font-size="8" text-anchor="middle">frontend span</text>
+        <rect x="295" y="130" width="130" height="24" rx="5" fill="rgba(8,51,68,0.7)" stroke="#22d3ee"/><text x="360" y="146" fill="#67e8f9" font-size="8" text-anchor="middle">API span</text>
+        <rect x="545" y="130" width="130" height="24" rx="5" fill="rgba(76,29,149,0.7)" stroke="#a78bfa"/><text x="610" y="146" fill="#c4b5fd" font-size="8" text-anchor="middle">agent span</text>
+        <rect x="805" y="130" width="130" height="24" rx="5" fill="rgba(120,53,15,0.6)" stroke="#fbbf24"/><text x="870" y="146" fill="#fbbf24" font-size="8" text-anchor="middle">tool span</text>
+        <line x1="175" y1="142" x2="295" y2="142" stroke="#34d399" stroke-width="1"/><line x1="425" y1="142" x2="545" y2="142" stroke="#34d399" stroke-width="1"/><line x1="675" y1="142" x2="805" y2="142" stroke="#34d399" stroke-width="1"/>
+        <text x="500" y="174" fill="#34d399" font-size="9" text-anchor="middle">same trace ID; a new span ID at each hop</text>
+        <line x1="110" y1="154" x2="240" y2="220" stroke="#64748b" stroke-width="1.2" marker-end="url(#ah17)"/>
+        <line x1="360" y1="154" x2="405" y2="220" stroke="#64748b" stroke-width="1.2" marker-end="url(#ah17)"/>
+        <line x1="610" y1="154" x2="595" y2="220" stroke="#64748b" stroke-width="1.2" marker-end="url(#ah17)"/>
+        <line x1="870" y1="154" x2="760" y2="220" stroke="#64748b" stroke-width="1.2" marker-end="url(#ah17)"/>
+        <rect x="110" y="222" width="780" height="135" rx="10" fill="rgba(30,41,59,0.35)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="500" y="247" fill="white" font-size="12" font-weight="600" text-anchor="middle">Logfire telemetry backend</text>
+        <line x1="170" y1="300" x2="820" y2="300" stroke="#475569" stroke-width="2"/>
+        <rect x="185" y="278" width="90" height="28" rx="4" fill="rgba(30,41,59,0.9)" stroke="#94a3b8"/><text x="230" y="296" fill="white" font-size="8" text-anchor="middle">frontend</text>
+        <rect x="275" y="278" width="105" height="28" rx="4" fill="rgba(8,51,68,0.8)" stroke="#22d3ee"/><text x="327" y="296" fill="white" font-size="8" text-anchor="middle">API</text>
+        <rect x="380" y="269" width="290" height="37" rx="4" fill="rgba(76,29,149,0.8)" stroke="#fb7185" stroke-width="2"/><text x="525" y="292" fill="white" font-size="9" font-weight="600" text-anchor="middle">agent · longest span</text>
+        <rect x="670" y="278" width="95" height="28" rx="4" fill="rgba(120,53,15,0.8)" stroke="#fbbf24"/><text x="717" y="296" fill="white" font-size="8" text-anchor="middle">tool</text>
+        <text x="500" y="333" fill="#94a3b8" font-size="9" text-anchor="middle">one searchable timeline, not four unrelated log files</text>
+      </svg>
+      <p class="diagram-caption">FRONTEND → API → AGENT → SAVINGS TOOL, PROPAGATING W3C TRACE CONTEXT AND EXPORTING THEIR SPANS INTO ONE CROSS-SERVICE TIMELINE</p>
+    </div>
+
+    <p><span class="jargon">Logfire</span> (an observability platform used to collect, search, and visualize traces and related records) acts as the <span class="jargon">telemetry backend</span> (the service that stores and displays traces, measurements, and structured logs). Python and TypeScript services export compatible OpenTelemetry data into it while preserving the relationships already created inside each process. One timeline can then separate frontend delay, API processing, model <span class="jargon">latency</span> (the time an operation takes), and tool latency.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import httpx
+from opentelemetry import propagate, trace
+
+tracer = trace.get_tracer("eunomia.api")
+
+async def fetch_savings(url: str) -&gt; dict[str, object]:
+    with tracer.start_as_current_span("savings.request"):
+        headers: dict[str, str] = {}
+        propagate.inject(headers)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            return response.json()</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { context, propagation, trace } from "@opentelemetry/api";
+
+const tracer = trace.getTracer("eunomia.api");
+
+export async function fetchSavings(url: string): Promise&lt;unknown&gt; {
+  return tracer.startActiveSpan("savings.request", async (span) =&gt; {
+    try {
+      const headers: Record&lt;string, string&gt; = {};
+      propagation.inject(context.active(), headers);
+      const response = await fetch(url, { headers });
+      if (!response.ok) throw new Error(`tool returned ${response.status}`);
+      return await response.json();
+    } finally { span.end(); }
+  });
+}</code></pre></div>
+
+    <p>Searchable fields should describe operations, versions, timings, and outcomes. Customer messages, account details, and other private data do not belong in the backend. Successful and failed requests can still be compared by status, error category, tool name, and duration without turning observability into a second customer-data store. Use an asynchronous batch processor with a bounded queue and export timeout. When the queue is full or the backend is unavailable, drop or separately report telemetry instead of blocking or failing the customer request.</p>
+
+    <div class="finding"><b>A real finding worth knowing:</b> if an outgoing request omits or corrupts W3C trace context, the receiving service may silently start a new trace. Both halves look valid in isolation, but the expected single timeline becomes two unrelated ones. Context propagation must therefore be verified at every HTTP (web request) and tool boundary.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> will send connected traces from its web client, service, model gateway, and capabilities through OpenTelemetry and its masking trace sink, so one savings conversation can be inspected as a single timeline. Logfire is one possible backend for the Python tooling; the TypeScript service exports plain OpenTelemetry. Skill Reporter will emit the same multi-package trace continuity for end-to-end report journeys.</div>
+  </article>
+
+  <!-- LESSON 19 -->
+  <article class="lesson" id="lesson-19">
+    <span class="lesson-tag">Lesson 19</span>
+    <h3>LLM-as-a-Judge Benchmarking</h3>
+    <div class="problem"><b>The problem:</b> exact-text checks cannot judge whether Eunomia guidance is relevant, clear, and evidence-grounded for nuanced customer questions. Human review can judge this, but not at the pace of every code change. Skill Reporter has the same scaling issue when qualitative report quality needs continuous scoring.</div>
+
+    <p><span class="jargon">LLM-as-a-judge</span> (using a second language model to score another model's answer) provides a repeatable first pass. The judge receives the user's request, the evidence available to the agent, the candidate answer, and a <span class="jargon">rubric</span> (a written scoring guide that defines what each score means). The rubric must describe observable qualities rather than vague goals such as “be good,” and the result must contain a structured score plus a short reason tied to evidence.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 350">
+        <defs><marker id="ah19" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="35" y="15" width="180" height="44" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/><text x="125" y="42" fill="white" font-size="11" font-weight="600" text-anchor="middle">User request</text>
+        <rect x="35" y="75" width="180" height="44" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="125" y="102" fill="white" font-size="11" font-weight="600" text-anchor="middle">Relevant evidence</text>
+        <rect x="35" y="135" width="180" height="44" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/><text x="125" y="162" fill="white" font-size="11" font-weight="600" text-anchor="middle">Candidate agent answer</text>
+        <rect x="35" y="195" width="180" height="44" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/><text x="125" y="222" fill="white" font-size="11" font-weight="600" text-anchor="middle">Scoring rubric</text>
+        <path d="M 215 37 L 290 37 L 350 117" fill="none" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#ah19)"/>
+        <path d="M 215 97 L 315 97 L 350 129" fill="none" stroke="#34d399" stroke-width="1.4" marker-end="url(#ah19)"/>
+        <line x1="215" y1="157" x2="348" y2="145" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#ah19)"/>
+        <path d="M 215 217 L 300 217 L 350 157" fill="none" stroke="#fbbf24" stroke-width="1.4" marker-end="url(#ah19)"/>
+        <rect x="350" y="103" width="165" height="78" rx="9" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="432" y="137" fill="white" font-size="12" font-weight="600" text-anchor="middle">Judge model</text><text x="432" y="157" fill="#c4b5fd" font-size="9" text-anchor="middle">no hidden score hints</text>
+        <line x1="515" y1="142" x2="585" y2="142" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah19)"/>
+        <rect x="587" y="103" width="180" height="78" rx="9" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="677" y="134" fill="white" font-size="11" font-weight="600" text-anchor="middle">Structured score</text><text x="677" y="151" fill="white" font-size="11" font-weight="600" text-anchor="middle">and reason</text>
+        <rect x="587" y="25" width="180" height="52" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/><text x="677" y="56" fill="white" font-size="11" font-weight="600" text-anchor="middle">Trusted human labels</text>
+        <path d="M 677 77 L 677 90 L 825 90 L 825 118" fill="none" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#ah19)"/>
+        <line x1="767" y1="142" x2="823" y2="142" stroke="#34d399" stroke-width="1.4" marker-end="url(#ah19)"/>
+        <rect x="825" y="118" width="150" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/><text x="900" y="142" fill="white" font-size="10" font-weight="600" text-anchor="middle">Calibration</text><text x="900" y="158" fill="white" font-size="10" font-weight="600" text-anchor="middle">comparison</text>
+        <path d="M 900 176 L 900 245 L 780 245" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah19)"/>
+        <rect x="600" y="220" width="180" height="52" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="690" y="251" fill="white" font-size="10" font-weight="600" text-anchor="middle">Accept judge setup</text>
+        <path d="M 900 176 L 900 310 L 515 310" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah19)"/>
+        <rect x="305" y="285" width="210" height="52" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/><text x="410" y="316" fill="white" font-size="10" font-weight="600" text-anchor="middle">Revise rubric or judge prompt</text>
+      </svg>
+      <p class="diagram-caption">REQUEST + RELEVANT EVIDENCE + CANDIDATE ANSWER + RUBRIC → JUDGE MODEL → STRUCTURED RESULT → COMPARE WITH TRUSTED HUMAN LABELS → ACCEPT OR REVISE THE JUDGE SETUP</p>
+    </div>
+
+    <p>A <span class="jargon">benchmark</span> (a fixed set of cases used to compare quality across versions) needs clear passes, clear failures, and difficult boundary cases. It must also probe order bias, preference for longer answers, leaked reference answers, and preference for wording similar to the rubric. The judge must not receive hidden hints about the expected score, because that would test hint-following rather than answer quality.</p>
+
+    <p><span class="jargon">Calibration</span> (checking automated scores against trusted human labels to learn whether the judge is reliable) happens before the judge is trusted in automation. Python and TypeScript judge clients run the same labelled examples and normalize their structured outputs into one report. In these abbreviated clients, <code class="inline">prompt</code> is assembled beforehand by a separately validated builder from the user request, relevant evidence, candidate answer, and rubric. Direct checks for safety, privacy, and required facts remain separate: a high clarity score can never cancel a prohibited disclosure.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import json
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class JudgeResult:
+    score: int
+    reason: str
+
+async def judge_answer(call_judge: Callable[[str], Awaitable[str]], prompt: str) -&gt; JudgeResult:
+    value = json.loads(await call_judge(prompt))
+    if not isinstance(value, dict):
+        raise ValueError("judge result must be an object")
+    score = value.get("score")
+    reason = value.get("reason")
+    if type(score) is not int or not 1 &lt;= score &lt;= 5:
+        raise ValueError("judge returned an invalid score")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("judge returned an invalid reason")
+    return JudgeResult(score=score, reason=reason.strip())</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface JudgeResult {
+  score: number;
+  reason: string;
+}
+
+type JudgeClient = (prompt: string) =&gt; Promise&lt;string&gt;;
+
+export async function judgeAnswer(callJudge: JudgeClient, prompt: string): Promise&lt;JudgeResult&gt; {
+  const value: unknown = JSON.parse(await callJudge(prompt));
+  if (typeof value !== "object" || value === null) throw new Error("invalid judge result");
+  const { score, reason } = value as Record&lt;string, unknown&gt;;
+  if (typeof score !== "number" || !Number.isInteger(score) || score &lt; 1 || score &gt; 5) {
+    throw new Error("invalid score");
+  }
+  if (typeof reason !== "string" || !reason.trim()) throw new Error("missing reason");
+  return { score, reason: reason.trim() };
+}</code></pre></div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a judge may reward a longer answer even when length is absent from the rubric. Calibration cases with equally correct short and long answers expose this verbosity bias, allowing the rubric or judge prompt to be corrected before the score becomes a gate.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> will use a calibrated judge model to score qualities such as relevance and clarity while retaining direct checks for required safety and privacy behavior. Skill Reporter will follow the same hybrid judge-plus-deterministic-check model.</div>
+  </article>
+
+  <!-- LESSON 25 -->
+  <article class="lesson" id="lesson-25">
+    <span class="lesson-tag">Lesson 25</span>
+    <h3>CI/CD Eval Gates</h3>
+    <div class="problem"><b>The problem:</b> Eunomia evals do not protect production if they run only manually or inconsistently. Every proposed change needs the same automatic gate, and meaningful quality loss must be blocked before merge. Skill Reporter requires the same CI discipline so reporting regressions never ship by accident.</div>
+
+    <p><span class="jargon">CI/CD</span> (the automated process that builds, tests, and delivers software changes) runs the relevant checks for every <span class="jargon">pull request</span> (a proposed set of code changes submitted for review before merging). An <span class="jargon">eval gate</span> (an automated pass-or-fail decision based on evaluation results) turns the report into an enforceable decision instead of an optional attachment.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 350">
+        <defs><marker id="ah25" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="20" y="45" width="135" height="56" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/><text x="87" y="78" fill="white" font-size="10" font-weight="600" text-anchor="middle">Pull request</text>
+        <line x1="155" y1="73" x2="190" y2="73" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah25)"/>
+        <rect x="192" y="45" width="165" height="56" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/><text x="274" y="69" fill="white" font-size="9" font-weight="600" text-anchor="middle">Build affected</text><text x="274" y="84" fill="white" font-size="9" font-weight="600" text-anchor="middle">packages</text>
+        <line x1="357" y1="73" x2="392" y2="73" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah25)"/>
+        <rect x="394" y="45" width="155" height="56" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/><text x="471" y="69" fill="white" font-size="9" font-weight="600" text-anchor="middle">Start test</text><text x="471" y="84" fill="white" font-size="9" font-weight="600" text-anchor="middle">system</text>
+        <line x1="549" y1="73" x2="584" y2="73" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah25)"/>
+        <rect x="586" y="45" width="145" height="56" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/><text x="658" y="78" fill="white" font-size="10" font-weight="600" text-anchor="middle">Run eval suite</text>
+        <line x1="731" y1="73" x2="766" y2="73" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah25)"/>
+        <rect x="768" y="45" width="145" height="56" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="840" y="78" fill="white" font-size="10" font-weight="600" text-anchor="middle">Create report</text>
+        <path d="M 840 101 L 840 145" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah25)"/>
+        <polygon points="840,148 975,213 840,278 705,213" fill="rgba(30,41,59,0.6)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="840" y="202" fill="white" font-size="9" font-weight="600" text-anchor="middle">Thresholds met and</text><text x="840" y="217" fill="white" font-size="9" font-weight="600" text-anchor="middle">critical cases pass?</text>
+        <line x1="975" y1="213" x2="1025" y2="213" stroke="#34d399" stroke-width="1.8" marker-end="url(#ah25)"/><text x="997" y="202" fill="#34d399" font-size="9">Yes</text>
+        <rect x="1027" y="185" width="65" height="56" rx="7" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="1059" y="208" fill="white" font-size="8" font-weight="600" text-anchor="middle">Merge</text><text x="1059" y="222" fill="white" font-size="8" font-weight="600" text-anchor="middle">allowed</text>
+        <path d="M 840 278 L 840 315 L 690 315" fill="none" stroke="#fb7185" stroke-width="1.8" marker-end="url(#ah25)"/><text x="815" y="306" fill="#fb7185" font-size="9">No</text>
+        <rect x="535" y="288" width="155" height="54" rx="7" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/><text x="612" y="320" fill="white" font-size="10" font-weight="600" text-anchor="middle">Merge blocked</text>
+        <path d="M 658 101 Q 570 150 500 190" fill="none" stroke="#fbbf24" stroke-width="1.3" stroke-dasharray="5,4" marker-end="url(#ah25)"/>
+        <rect x="325" y="175" width="175" height="60" rx="8" fill="rgba(120,53,15,0.25)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="5,4"/><text x="412" y="200" fill="white" font-size="10" font-weight="600" text-anchor="middle">Infrastructure failure</text><text x="412" y="218" fill="#fbbf24" font-size="8" text-anchor="middle">inconclusive, never a pass</text>
+      </svg>
+      <p class="diagram-caption">PULL REQUEST → BUILD → START CONTROLLED SYSTEM → RUN EVALS → REPORT → QUALITY DECISION, WITH INFRASTRUCTURE FAILURE KEPT DISTINCT FROM A PRODUCT PASS</p>
+    </div>
+
+    <p>The workflow first builds affected packages, starts the controlled test system, and selects cases based on the changed files. High-risk changes still take the full-suite path. It produces <span class="jargon">machine-readable</span> results (structured data that software can parse reliably) for automation and a readable artifact for reviewers, including every failed case. New results are compared with an accepted <span class="jargon">baseline</span> (a trusted earlier result used as the point of comparison) and a <span class="jargon">threshold</span> (the minimum acceptable score or maximum permitted regression).</p>
+
+    <p>Average quality is not enough: one critical safety failure blocks the change even if every ordinary case passes. Model outages, network failures, and broken test infrastructure are reported as <span class="jargon">inconclusive</span> (unable to establish product quality because the evaluation did not complete reliably) rather than mislabeled as product regressions or, worse, quality passes. Any exception requires an explicit recorded approval; the threshold is never quietly weakened to make a build green.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from typing import Literal, TypedDict
+
+class EvalReport(TypedDict):
+    complete: bool
+    average_score: float
+    critical_failures: list[str]
+
+GateDecision = Literal["pass", "fail", "inconclusive"]
+
+def decide_gate(report: EvalReport, minimum_score: float) -&gt; GateDecision:
+    if not report["complete"]:
+        return "inconclusive"
+    if report["critical_failures"] or report["average_score"] &lt; minimum_score:
+        return "fail"
+    return "pass"</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface EvalReport {
+  complete: boolean;
+  averageScore: number;
+  criticalFailures: string[];
+}
+
+type GateDecision = "pass" | "fail" | "inconclusive";
+
+export function decideGate(report: EvalReport, minimumScore: number): GateDecision {
+  if (!report.complete) return "inconclusive";
+  const belowThreshold = report.averageScore &lt; minimumScore;
+  if (belowThreshold || report.criticalFailures.length &gt; 0) return "fail";
+  return "pass";
+}</code></pre></div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> one language's eval command may exit successfully after recording failed cases while the other returns a failure code. The pipeline must derive its decision from the validated report and its critical-case results, not from command completion alone.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> every <b>Eunomia</b> pull request will run the relevant evals automatically and will be blocked when savings-answer quality or a critical safety case falls below its required threshold. Skill Reporter pull requests will use equivalent blocking gates for report correctness and safety.</div>
+  </article>
+
+  <!-- LESSON 26 -->
+  <article class="lesson" id="lesson-26">
+    <span class="lesson-tag">Lesson 26</span>
+    <h3>Playwright End-to-End Verification</h3>
+    <div class="problem"><b>The problem:</b> unit tests can prove isolated Eunomia functions while the real customer journey still fails at authentication, API wiring, streaming, or tool connectivity. The missing proof is a full browser-to-result path. Skill Reporter has the same end-to-end risk unless report-generation journeys are exercised through the actual UI and backend chain.</div>
+
+    <p><span class="jargon">Playwright</span> (a browser-automation tool that can click, type, and inspect a real web page) runs an <span class="jargon">end-to-end test, or E2E test</span> (a test that exercises the complete user journey across the frontend and backend). The test starts the frontend, API, supporting services, and controlled model or tool dependencies, opens the actual chat page, and submits a savings question through the same field a customer uses.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 390">
+        <defs><marker id="ah26" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="20" y="55" width="160" height="62" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/><text x="100" y="82" fill="white" font-size="10" font-weight="600" text-anchor="middle">Playwright test</text><text x="100" y="98" fill="white" font-size="10" font-weight="600" text-anchor="middle">runner</text>
+        <line x1="180" y1="86" x2="235" y2="86" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah26)"/>
+        <rect x="237" y="55" width="155" height="62" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/><text x="314" y="91" fill="white" font-size="11" font-weight="600" text-anchor="middle">Real browser</text>
+        <line x1="392" y1="76" x2="475" y2="76" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah26)"/>
+        <line x1="475" y1="98" x2="392" y2="98" stroke="#34d399" stroke-width="1.3" marker-end="url(#ah26)"/>
+        <rect x="477" y="55" width="145" height="62" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/><text x="549" y="91" fill="white" font-size="11" font-weight="600" text-anchor="middle">Frontend</text>
+        <line x1="622" y1="76" x2="705" y2="76" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah26)"/><line x1="705" y1="98" x2="622" y2="98" stroke="#34d399" stroke-width="1.3" marker-end="url(#ah26)"/>
+        <rect x="707" y="55" width="130" height="62" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="772" y="91" fill="white" font-size="11" font-weight="600" text-anchor="middle">API</text>
+        <line x1="837" y1="76" x2="920" y2="76" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah26)"/><line x1="920" y1="98" x2="837" y2="98" stroke="#34d399" stroke-width="1.3" marker-end="url(#ah26)"/>
+        <rect x="922" y="55" width="155" height="62" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/><text x="999" y="82" fill="white" font-size="10" font-weight="600" text-anchor="middle">Agent and</text><text x="999" y="98" fill="white" font-size="10" font-weight="600" text-anchor="middle">tools</text>
+        <line x1="314" y1="117" x2="314" y2="170" stroke="#64748b" stroke-width="1.4" marker-end="url(#ah26)"/>
+        <rect x="65" y="175" width="145" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="137" y="209" fill="white" font-size="10" font-weight="600" text-anchor="middle">Visible assertions</text>
+        <rect x="235" y="175" width="145" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/><text x="307" y="209" fill="white" font-size="10" font-weight="600" text-anchor="middle">Network evidence</text>
+        <rect x="405" y="175" width="125" height="58" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/><text x="467" y="209" fill="white" font-size="10" font-weight="600" text-anchor="middle">Screenshot</text>
+        <rect x="555" y="175" width="140" height="58" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/><text x="625" y="209" fill="white" font-size="10" font-weight="600" text-anchor="middle">Browser trace</text>
+        <path d="M 314 155 L 137 175" fill="none" stroke="#64748b" stroke-width="1.1" marker-end="url(#ah26)"/><path d="M 314 155 L 307 175" fill="none" stroke="#64748b" stroke-width="1.1" marker-end="url(#ah26)"/><path d="M 314 155 L 467 175" fill="none" stroke="#64748b" stroke-width="1.1" marker-end="url(#ah26)"/><path d="M 314 155 L 625 175" fill="none" stroke="#64748b" stroke-width="1.1" marker-end="url(#ah26)"/>
+        <line x1="137" y1="233" x2="137" y2="290" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah26)"/>
+        <rect x="55" y="292" width="165" height="58" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/><text x="137" y="326" fill="white" font-size="11" font-weight="600" text-anchor="middle">Pass or fail result</text>
+      </svg>
+      <p class="diagram-caption">PLAYWRIGHT DRIVES A REAL BROWSER THROUGH FRONTEND → API → AGENT AND TOOLS, THEN COLLECTS VISIBLE, NETWORK, SCREENSHOT, AND TRACE EVIDENCE</p>
+    </div>
+
+    <p>A <span class="jargon">locator</span> (a stable rule for finding an element on a page) should use accessible roles (labels such as button or textbox exposed to assistive technology) or deliberate test identifiers (stable names added for automation), not screen coordinates or styling classes. The test waits for a visible completion state rather than sleeping for a guessed number of seconds. It then checks the final answer, tool-derived details, error states, and absence of private internal information. Where both agent variants exist, the same journey runs against the Python-backed and TypeScript-backed systems.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from playwright.async_api import Page, expect
+
+async def test_savings_journey(page: Page) -&gt; None:
+    await page.goto("http://localhost:3000/chat")
+    await page.get_by_role("textbox", name="Message").fill(
+        "How much interest would £10,000 earn?"
+    )
+    await page.get_by_role("button", name="Send").click()
+    answer = page.get_by_test_id("assistant-answer").last
+    await expect(answer).to_have_attribute("data-streaming", "false")
+    await expect(answer).to_contain_text("interest")
+    await expect(answer).not_to_contain_text("internal_tool_call")</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { expect, test } from "@playwright/test";
+
+test("should complete a savings journey", async ({ page }) =&gt; {
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "Message" }).fill(
+    "How much interest would £10,000 earn?",
+  );
+  await page.getByRole("button", { name: "Send" }).click();
+  const answer = page.getByTestId("assistant-answer").last();
+  await expect(answer).toHaveAttribute("data-streaming", "false");
+  await expect(answer).toContainText("interest");
+  await expect(answer).not.toContainText("internal_tool_call");
+});</code></pre></div>
+
+    <p>When a test fails, screenshots, console errors, failed network requests, and a <span class="jargon">trace artifact</span> (a saved browser timeline containing actions, page state, and network evidence from a test run) make the failure reproducible. A small critical journey set belongs on pull requests; a broader suite can run on a schedule so feedback remains fast without abandoning coverage.</p>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a streamed-answer test can pass locally and fail in automation when it waits a fixed number of seconds. Waiting for the page's real completion state takes more care to implement, but it remains reliable when machines, models, or networks run at different speeds.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> applies this lesson's principle — prove the real running system from outside — through an independent Python probe suite that calls the public HTTP routes instead of driving a browser. A probe submits a savings question, reads the complete typed event stream, checks that it ends with exactly one ending event, and uses the stub upstream's call counts to confirm the expected backend work. Skill Reporter will run the same outside-in proof for report workflows.</div>
+  </article>
+
+  <!-- LESSON 30 -->
+  <article class="lesson" id="lesson-30">
+    <span class="lesson-tag">Lesson 30</span>
+    <h3>Unified Monorepo Orchestration</h3>
+    <div class="problem"><b>The problem:</b> when Eunomia frontend, API, tools, and evals drift across disconnected commands or package boundaries, one package can pass while silently breaking a dependent package. Local developer setups can mask these breakages until clean builds fail. Skill Reporter has the same integration fragility without unified monorepo contracts and shared verification steps.</div>
+
+    <p>A <span class="jargon">monorepo</span> (one repository containing several related software packages) keeps the connected system under one versioned change. A <span class="jargon">workspace</span> (the package-manager configuration that links local packages and manages their shared installation) defines the package boundaries and their declared dependencies. Source, tests, and build output stay inside the package that owns them; only genuinely common configuration belongs at the root.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 420">
+        <defs><marker id="ah30" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="30" y="30" width="735" height="350" rx="14" fill="rgba(30,41,59,0.18)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="55" y="58" fill="white" font-size="12" font-weight="600">Eunomia monorepo</text>
+        <rect x="285" y="72" width="220" height="58" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/><text x="395" y="106" fill="white" font-size="11" font-weight="600" text-anchor="middle">Shared task graph</text>
+        <rect x="75" y="190" width="140" height="58" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/><text x="145" y="224" fill="white" font-size="11" font-weight="600" text-anchor="middle">Frontend</text>
+        <rect x="260" y="190" width="140" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/><text x="330" y="224" fill="white" font-size="11" font-weight="600" text-anchor="middle">API</text>
+        <rect x="445" y="190" width="140" height="58" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/><text x="515" y="224" fill="white" font-size="11" font-weight="600" text-anchor="middle">Tools</text>
+        <rect x="630" y="190" width="105" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="682" y="224" fill="white" font-size="11" font-weight="600" text-anchor="middle">Evals</text>
+        <path d="M 395 130 L 145 188" fill="none" stroke="#a78bfa" stroke-width="1.2" marker-end="url(#ah30)"/><path d="M 395 130 L 330 188" fill="none" stroke="#a78bfa" stroke-width="1.2" marker-end="url(#ah30)"/><path d="M 395 130 L 515 188" fill="none" stroke="#a78bfa" stroke-width="1.2" marker-end="url(#ah30)"/><path d="M 395 130 L 682 188" fill="none" stroke="#a78bfa" stroke-width="1.2" marker-end="url(#ah30)"/>
+        <line x1="215" y1="219" x2="258" y2="219" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah30)"/><line x1="400" y1="219" x2="443" y2="219" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah30)"/>
+        <path d="M 682 248 Q 600 290 400 235" fill="none" stroke="#34d399" stroke-width="1.3" marker-end="url(#ah30)"/><path d="M 682 248 Q 620 275 585 235" fill="none" stroke="#34d399" stroke-width="1.3" marker-end="url(#ah30)"/>
+        <rect x="285" y="310" width="220" height="48" rx="8" fill="rgba(136,19,55,0.25)" stroke="#fb7185" stroke-width="1.5"/><text x="395" y="339" fill="white" font-size="11" font-weight="600" text-anchor="middle">Build cache</text>
+        <path d="M 370 310 L 370 132" fill="none" stroke="#fb7185" stroke-width="1.2" marker-end="url(#ah30)"/><path d="M 420 130 L 420 308" fill="none" stroke="#fb7185" stroke-width="1.2" marker-end="url(#ah30)"/>
+        <rect x="805" y="115" width="165" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/><text x="887" y="149" fill="white" font-size="10" font-weight="600" text-anchor="middle">One local command</text>
+        <rect x="805" y="225" width="165" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="887" y="259" fill="white" font-size="10" font-weight="600" text-anchor="middle">One CI/CD command</text>
+        <path d="M 805 144 Q 680 90 507 101" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah30)"/><path d="M 805 254 Q 690 150 507 110" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah30)"/>
+      </svg>
+      <p class="diagram-caption">ONE EUNOMIA MONOREPO → A SHARED TASK GRAPH ORDERS FRONTEND, API, TOOLS, AND EVAL WORK → LOCAL AND CI COMMANDS USE THE SAME GRAPH AND SAFE CACHE</p>
+    </div>
+
+    <p>A <span class="jargon">task graph</span> (a map showing which build, test, and eval tasks depend on other tasks) compiles (translates source code into runnable output) shared tools before the API or eval runner imports them (loads their exported code). It can run only affected work for quick feedback while retaining one complete verification command. Local development and CI/CD use the same top-level commands, so the automation does not exercise a different system from the developer.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+from graphlib import TopologicalSorter
+
+TASKS = {
+    "domain:build": set(),
+    "service:build": {"domain:build"},
+    "quality:test": {"domain:build", "service:build"},
+}
+COMMANDS = {
+    "domain:build": ("pnpm", "--filter", "@eunomia/domain", "build"),
+    "service:build": ("pnpm", "--filter", "@eunomia/service", "build"),
+    "quality:test": ("pnpm", "--filter", "@eunomia/quality", "test"),
+}
+
+async def run_task(name: str) -&gt; None:
+    process = await asyncio.create_subprocess_exec(*COMMANDS[name])
+    if await process.wait() != 0:
+        raise RuntimeError(f"{name} failed")
+
+async def verify() -&gt; None:
+    for task in TopologicalSorter(TASKS).static_order():
+        await run_task(task)</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const dependencies: Record&lt;string, string[]&gt; = {
+  "domain:build": [],
+  "service:build": ["domain:build"],
+  "quality:test": ["domain:build", "service:build"],
+};
+const commands: Record&lt;string, string[]&gt; = {
+  "domain:build": ["pnpm", "--filter", "@eunomia/domain", "build"],
+  "service:build": ["pnpm", "--filter", "@eunomia/service", "build"],
+  "quality:test": ["pnpm", "--filter", "@eunomia/quality", "test"],
+};
+const completed = new Set&lt;string&gt;();
+const runFile = promisify(execFile);
+
+async function runTask(name: string): Promise&lt;void&gt; {
+  for (const dependency of dependencies[name] ?? []) await runTask(dependency);
+  if (completed.has(name)) return;
+  const [command, ...args] = commands[name];
+  await runFile(command, args);
+  completed.add(name);
+}
+
+await runTask("quality:test");</code></pre></div>
+
+    <p>A <span class="jargon">cache</span> (stored output that allows unchanged tasks to be reused instead of run again) is safe for deterministic builds and tests. Live eval results should not be cached when model behavior or external inputs can change, unless every input and version is captured. Shared schemas (strict descriptions of data shapes) and generated types (code-created type definitions) keep tool contracts aligned across API, eval, and frontend packages, while explicit dependency declarations (each package's list of required libraries) prevent a friendly local installation from hiding a broken isolated build (a build run with only that package's declared dependencies).</p>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a TypeScript workspace import may work locally because a dependency was hoisted (installed in a shared parent location) into reach, then fail in an isolated build because the owning package never declared it. Python can hide the same defect when an undeclared module happens to exist in one developer's environment. Isolation tests expose both cases.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> will keep its service, quality suite, probes and web client in one repository so the event contract, the scenarios that depend on it and the client that reads it change together and are verified as one connected system. Skill Reporter will use the same monorepo contract discipline so shared schemas evolve safely across packages.</div>
+  </article>
+
+  <!-- LESSON 56 -->
+  <article class="lesson" id="lesson-56">
+    <span class="lesson-tag">Lesson 56</span>
+    <h3>Last-Approved Baseline Promotion for Eval Gates</h3>
+    <div class="problem"><b>The problem:</b> comparing Eunomia to only the latest eval output is unsafe because that baseline may already include accepted or misclassified losses. Repeated small degradations can normalize bad quality. Skill Reporter has the same baseline-drift risk unless promotion always compares against a trusted reference artifact.</div>
+
+    <p>A <span class="jargon">regression</span> (a measurable loss in behavior or answer quality) must be measured against a trustworthy baseline, not simply the nearest file in storage. Every report therefore records its <span class="jargon">code revision</span> (the exact version of the code that produced it), dataset version, rubric version, threshold-policy version, completeness state, final gate decision, and any manual override with its approval evidence.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 430">
+        <defs><marker id="ah56" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <text x="35" y="35" fill="#94a3b8" font-size="10">WALK BACKWARD THROUGH REVISION HISTORY</text>
+        <rect x="35" y="55" width="180" height="62" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/><text x="125" y="82" fill="white" font-size="10" font-weight="600" text-anchor="middle">Current change</text><text x="125" y="100" fill="#67e8f9" font-size="8" text-anchor="middle">start from parent</text>
+        <line x1="215" y1="86" x2="280" y2="86" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah56)"/>
+        <rect x="282" y="55" width="190" height="62" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/><text x="377" y="82" fill="white" font-size="10" font-weight="600" text-anchor="middle">Parent report: failed</text><text x="377" y="100" fill="#fb7185" font-size="8" text-anchor="middle">gate did not pass</text>
+        <line x1="472" y1="86" x2="537" y2="86" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah56)"/>
+        <rect x="539" y="55" width="200" height="62" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/><text x="639" y="82" fill="white" font-size="10" font-weight="600" text-anchor="middle">Earlier report: incomplete</text><text x="639" y="100" fill="#fbbf24" font-size="8" text-anchor="middle">missing compatible evidence</text>
+        <line x1="739" y1="86" x2="804" y2="86" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah56)"/>
+        <rect x="806" y="55" width="235" height="62" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.8"/><text x="923" y="82" fill="white" font-size="10" font-weight="600" text-anchor="middle">Earlier report: passed</text><text x="923" y="100" fill="#34d399" font-size="8" text-anchor="middle">compatible and genuinely green</text>
+        <text x="377" y="139" fill="#fb7185" font-size="9" text-anchor="middle">REJECTED</text><text x="639" y="139" fill="#fbbf24" font-size="9" text-anchor="middle">REJECTED</text><text x="923" y="139" fill="#34d399" font-size="9" font-weight="600" text-anchor="middle">SELECTED TRUSTED BASELINE</text>
+        <rect x="105" y="205" width="200" height="58" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/><text x="205" y="239" fill="white" font-size="10" font-weight="600" text-anchor="middle">Current eval report</text>
+        <rect x="390" y="205" width="220" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="500" y="239" fill="white" font-size="10" font-weight="600" text-anchor="middle">Selected trusted baseline</text>
+        <path d="M 923 145 Q 780 185 610 225" fill="none" stroke="#34d399" stroke-width="1.4" marker-end="url(#ah56)"/>
+        <path d="M 305 234 L 690 234" fill="none" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#ah56)"/>
+        <path d="M 610 234 L 690 234" fill="none" stroke="#34d399" stroke-width="1.4" marker-end="url(#ah56)"/>
+        <polygon points="820,185 960,250 820,315 680,250" fill="rgba(30,41,59,0.6)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="820" y="241" fill="white" font-size="9" font-weight="600" text-anchor="middle">Regression within</text><text x="820" y="256" fill="white" font-size="9" font-weight="600" text-anchor="middle">allowed limits?</text>
+        <path d="M 900 294 L 990 350" fill="none" stroke="#34d399" stroke-width="1.7" marker-end="url(#ah56)"/><text x="945" y="310" fill="#34d399" font-size="9">Yes</text>
+        <rect x="870" y="352" width="215" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/><text x="977" y="377" fill="white" font-size="9" font-weight="600" text-anchor="middle">Gate passes and current</text><text x="977" y="393" fill="white" font-size="9" font-weight="600" text-anchor="middle">report is promoted</text>
+        <path d="M 740 294 L 600 350" fill="none" stroke="#fb7185" stroke-width="1.7" marker-end="url(#ah56)"/><text x="680" y="310" fill="#fb7185" font-size="9">No</text>
+        <rect x="405" y="352" width="210" height="58" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/><text x="510" y="377" fill="white" font-size="9" font-weight="600" text-anchor="middle">Gate fails and baseline</text><text x="510" y="393" fill="white" font-size="9" font-weight="600" text-anchor="middle">remains unchanged</text>
+      </svg>
+      <p class="diagram-caption">CURRENT CHANGE WALKS BACK PAST FAILED AND INCOMPLETE REPORTS → SELECTS THE NEAREST COMPATIBLE PASS → COMPARES CURRENT QUALITY → PROMOTES ONLY AFTER A SUCCESSFUL GATE</p>
+    </div>
+
+    <p>An <span class="jargon">ancestry walk</span> (moving backward through earlier code revisions until a valid historical report is found) begins at the current change's parent and supplies reports newest-first along that ancestry. It rejects reports that are incomplete, did not pass their own gate, were manually overridden without approval evidence, or use incompatible dataset, rubric, or threshold-policy versions. The first remaining pass is therefore the nearest trusted comparison point, and the pull-request report displays both its revision and every rejection reason.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Literal
+
+@dataclass(frozen=True)
+class Report:
+    revision: str
+    complete: bool
+    gate: Literal["pass", "fail", "inconclusive"]
+    dataset: str
+    rubric: str
+    threshold_policy: str
+    overridden: bool
+    override_approval: str | None
+
+def select_baseline(
+    history_newest_first: Iterable[Report],
+    dataset: str,
+    rubric: str,
+    threshold_policy: str,
+) -&gt; Report:
+    for report in history_newest_first:
+        compatible = (
+            report.dataset == dataset
+            and report.rubric == rubric
+            and report.threshold_policy == threshold_policy
+        )
+        override_valid = not report.overridden or report.override_approval is not None
+        if report.complete and report.gate == "pass" and compatible and override_valid:
+            return report
+    raise LookupError("no compatible passing baseline")</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface Report {
+  revision: string;
+  complete: boolean;
+  gate: "pass" | "fail" | "inconclusive";
+  dataset: string;
+  rubric: string;
+  thresholdPolicy: string;
+  overridden: boolean;
+  overrideApproval: string | null;
+}
+
+export function selectBaseline(
+  historyNewestFirst: readonly Report[],
+  dataset: string,
+  rubric: string,
+  thresholdPolicy: string,
+): Report {
+  for (const report of historyNewestFirst) {
+    const compatible =
+      report.dataset === dataset &amp;&amp;
+      report.rubric === rubric &amp;&amp;
+      report.thresholdPolicy === thresholdPolicy;
+    const overrideValid = !report.overridden || report.overrideApproval !== null;
+    if (report.complete &amp;&amp; report.gate === "pass" &amp;&amp; compatible &amp;&amp; overrideValid) {
+      return report;
+    }
+  }
+  throw new Error("no compatible passing baseline");
+}</code></pre></div>
+
+    <p>The current result must satisfy fixed minimum requirements as well as stay within the permitted change from the baseline. Missing or corrupt history is an explicit policy state, never an excuse to compare against zero or pass automatically. <span class="jargon">Baseline promotion</span> (marking a newly passing report as the trusted reference for future comparisons) happens only after the current gate succeeds, with coordination that prevents concurrent builds from promoting older results out of order.</p>
+
+    <blockquote>The latest report is a fact about time; the trusted baseline is a fact about quality. They are not interchangeable.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> Python and TypeScript implementations can select different historical reports when one treats a missing gate field as failure while the other treats it as merely absent. A shared report schema and explicit eligibility rules are necessary before both implementations can agree on the baseline.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> will gate every pull request against the last approved run manifest, a run that fully passed, never against whatever ran most recently, preventing an already-regressed run from becoming the new definition of acceptable quality. Skill Reporter will follow the same trusted-baseline rule for report-quality gates.</div>
+  </article>
+
+  <!-- LESSON 57 -->
+  <article class="lesson" id="lesson-57">
+    <span class="lesson-tag">Lesson 57</span>
+    <h3>Consecutive-Pass Promotion Windows for Eval Gates</h3>
+    <div class="problem"><b>The problem:</b> a single green eval run can be luck, not stability. If Eunomia promotes on one pass, noisy runs can slip through as false confidence. Skill Reporter has the same risk when one-off passes are treated as release-ready evidence.</div>
+
+    <p>A <span class="jargon">promotion window</span> (a required run count that must all pass before release) turns promotion into a stability check, not a moment-in-time check. Day 56 chooses the right baseline; Day 57 adds timing discipline: require consecutive passes and keep the same regression tolerance against the approved baseline on every run inside that window.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 290">
+        <defs><marker id="ah57" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="40" y="104" width="190" height="62" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="135" y="130" fill="white" font-size="11" font-weight="600" text-anchor="middle">Recent eval runs</text>
+        <text x="135" y="147" fill="#94a3b8" font-size="9" text-anchor="middle">pass/fail + score</text>
+        <line x1="230" y1="135" x2="300" y2="135" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah57)"/>
+        <rect x="302" y="82" width="270" height="106" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="437" y="112" fill="white" font-size="11" font-weight="600" text-anchor="middle">Promotion window gate</text>
+        <text x="437" y="131" fill="#67e8f9" font-size="9" text-anchor="middle">require N consecutive passes</text>
+        <text x="437" y="148" fill="#67e8f9" font-size="9" text-anchor="middle">all within baseline tolerance</text>
+        <path d="M 572 112 Q 652 76 742 105" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah57)"/>
+        <text x="655" y="75" fill="#34d399" font-size="9">stable window</text>
+        <rect x="742" y="75" width="190" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="837" y="110" fill="white" font-size="11" font-weight="600" text-anchor="middle">Promote release</text>
+        <path d="M 572 158 Q 652 206 742 183" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah57)"/>
+        <text x="655" y="226" fill="#fb7185" font-size="9">failed gate</text>
+        <rect x="742" y="154" width="190" height="58" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="837" y="188" fill="white" font-size="11" font-weight="600" text-anchor="middle">Hold and investigate</text>
+      </svg>
+      <p class="diagram-caption">RECENT RUNS → CONSECUTIVE-PASS WINDOW + BASELINE TOLERANCE CHECK → PROMOTE ONLY WHEN THE WHOLE WINDOW IS STABLE</p>
+    </div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass
+
+@dataclass
+class EvalRun:
+    run_id: str
+    score: float
+    gate_passed: bool
+
+def should_promote_after_window(
+    history: list[EvalRun],
+    approved_baseline_score: float,
+    window_size: int = 3,
+    max_regression: float = 0.02,
+) -> tuple[bool, str]:
+    if len(history) &lt; window_size:
+        return False, f"need {window_size} runs, got {len(history)}"
+    window = history[-window_size:]
+    failed = [run.run_id for run in window if not run.gate_passed]
+    if failed:
+        return False, f"window contains gate failures: {failed}"
+    for run in window:
+        drop = approved_baseline_score - run.score
+        if (drop - max_regression) &gt; 1e-9:
+            return False, f"run {run.run_id} regressed {drop:.3f} &gt; allowed {max_regression:.3f}"
+    return True, f"{window_size} consecutive passes within regression tolerance"</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface EvalRun {
+  runId: string;
+  score: number;
+  gatePassed: boolean;
+}
+
+function shouldPromoteAfterWindow(
+  history: EvalRun[],
+  approvedBaselineScore: number,
+  windowSize = 3,
+  maxRegression = 0.02,
+): { promote: boolean; reason: string } {
+  if (history.length &lt; windowSize) {
+    return { promote: false, reason: `need ${windowSize} runs, got ${history.length}` };
+  }
+  const window = history.slice(-windowSize);
+  const failed = window.filter((run) =&gt; !run.gatePassed).map((run) =&gt; run.runId);
+  if (failed.length &gt; 0) {
+    return { promote: false, reason: `window contains gate failures: ${JSON.stringify(failed)}` };
+  }
+  for (const run of window) {
+    const drop = approvedBaselineScore - run.score;
+    if (drop - maxRegression &gt; 1e-9) {
+      return {
+        promote: false,
+        reason: `run ${run.runId} regressed ${drop.toFixed(3)} &gt; allowed ${maxRegression.toFixed(3)}`,
+      };
+    }
+  }
+  return { promote: true, reason: `${windowSize} consecutive passes within regression tolerance` };
+}</code></pre></div>
+
+    <blockquote>One passing run proves possibility. A consecutive-pass window proves stability.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> strict floating-point comparisons can falsely block an exact-threshold case (for example 0.020000000000000018 &gt; 0.02). Both implementations now use a tiny epsilon guard so equality at the threshold behaves consistently.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s deploy approval only records a run's manifest as a candidate; the approved baseline moves to it only after a window of consecutive passing runs on <code class="inline">main</code> with tolerance-safe scores across the whole window. Skill Reporter uses the same rule so promotions are based on sustained quality, not a single lucky run.</div>
+  </article>
+
+  <!-- LESSON 58 -->
+  <article class="lesson" id="lesson-58">
+    <span class="lesson-tag">Lesson 58</span>
+    <h3>Model Retry Guard with Failure Classification</h3>
+    <div class="problem"><b>The problem:</b> naive retry loops cause two failures in production: retrying fatal errors forever, and giving up too early on transient failures that would recover. Eunomia and Skill Reporter both need explicit retry rules with a hard budget.</div>
+
+    <p>A <span class="jargon">retry guard</span> (a policy that decides whether a failed attempt is retried or stopped) classifies failures as transient or fatal, then applies a strict retry budget. Success stops immediately, fatal errors stop immediately, transient errors retry only while budget remains.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 290">
+        <defs><marker id="ah58" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="40" y="112" width="180" height="62" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="130" y="138" fill="white" font-size="11" font-weight="600" text-anchor="middle">Attempt result</text>
+        <text x="130" y="155" fill="#94a3b8" font-size="9" text-anchor="middle">success or failure kind</text>
+        <line x1="220" y1="143" x2="294" y2="143" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah58)"/>
+        <rect x="296" y="89" width="215" height="108" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="403" y="118" fill="white" font-size="11" font-weight="600" text-anchor="middle">Retry guard policy</text>
+        <text x="403" y="137" fill="#c4b5fd" font-size="9" text-anchor="middle">classify transient vs fatal</text>
+        <text x="403" y="154" fill="#c4b5fd" font-size="9" text-anchor="middle">enforce max retry budget</text>
+        <path d="M 511 113 Q 582 80 664 104" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah58)"/>
+        <text x="586" y="76" fill="#34d399" font-size="9">success or retryable</text>
+        <rect x="664" y="76" width="132" height="56" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="730" y="109" fill="white" font-size="10" font-weight="600" text-anchor="middle">Continue flow</text>
+        <path d="M 511 170 Q 582 212 664 188" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah58)"/>
+        <text x="584" y="230" fill="#fb7185" font-size="9">fatal or budget exhausted</text>
+        <rect x="664" y="160" width="210" height="56" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="769" y="193" fill="white" font-size="10" font-weight="600" text-anchor="middle">Stop with explicit reason</text>
+      </svg>
+      <p class="diagram-caption">ATTEMPT RESULT → FAILURE CLASSIFICATION + RETRY BUDGET → SELECTIVE RETRY OR IMMEDIATE STOP</p>
+    </div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass
+from enum import Enum
+
+class FailureKind(str, Enum):
+    TRANSIENT = "transient"
+    FATAL = "fatal"
+
+@dataclass(frozen=True)
+class AttemptResult:
+    ok: bool
+    failure_kind: FailureKind | None = None
+
+def decide_retry(attempt_number: int, max_retries: int, result: AttemptResult) -&gt; tuple[bool, str]:
+    if result.ok:
+        return False, "success"
+    if result.failure_kind == FailureKind.FATAL:
+        return False, "fatal error - stop immediately"
+    if attempt_number &gt; max_retries:
+        return False, f"retry budget exhausted ({max_retries})"
+    return True, f"transient error - retry {attempt_number}/{max_retries}"</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type FailureKind = "transient" | "fatal";
+
+interface AttemptResult {
+  ok: boolean;
+  failureKind?: FailureKind;
+}
+
+function decideRetry(
+  attemptNumber: number,
+  maxRetries: number,
+  result: AttemptResult,
+): { shouldRetry: boolean; reason: string } {
+  if (result.ok) return { shouldRetry: false, reason: "success" };
+  if (result.failureKind === "fatal") {
+    return { shouldRetry: false, reason: "fatal error - stop immediately" };
+  }
+  if (attemptNumber &gt; maxRetries) {
+    return { shouldRetry: false, reason: `retry budget exhausted (${maxRetries})` };
+  }
+  return { shouldRetry: true, reason: `transient error - retry ${attemptNumber}/${maxRetries}` };
+}</code></pre></div>
+
+    <blockquote>Retries are useful only when they are selective and bounded.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> without explicit failure classification, different services interpret the same error differently and create inconsistent retry behavior. A shared failure taxonomy and budget rule keeps retry outcomes predictable across stacks.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> can recover from transient provider/tool issues without masking hard failures or creating runaway loops. Skill Reporter follows the same retry discipline for deterministic reliability.</div>
+  </article>
+
+  <!-- LESSON 59 -->
+  <article class="lesson" id="lesson-59">
+    <span class="lesson-tag">Lesson 59</span>
+    <h3>Stateful Evaluator Graph</h3>
+    <div class="problem"><b>The problem:</b> when evaluation retry logic is hidden inside nested conditionals, operations teams cannot reliably explain why a run was approved, revised, or rejected. The real problem is deciding the next operational step from state, not just generating text. The graph exists to make control flow explicit: it owns step order, branch rules, and state updates.</div>
+
+    <p>LLMs still do useful work inside steps (for example, extracting entities and intent from the customer question), but they do not directly decide control flow. State-machine logic decides what happens next; model inference stays bounded inside each step.</p>
+
+    <p>Relationship to Lesson 5: same graph pattern, different scope. Lesson 5 applied stateful graph routing to general workflow paths. Lesson 59 applies stateful graph routing to evaluator operations and terminal decision states (`APPROVED` or `REJECTED`).</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 320">
+        <defs><marker id="ah59" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="80" y="130" width="132" height="56" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="146" y="164" fill="white" font-size="10" font-weight="600" text-anchor="middle">DRAFT</text>
+        <line x1="212" y1="158" x2="284" y2="158" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah59)"/>
+        <rect x="286" y="130" width="170" height="56" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="371" y="154" fill="white" font-size="10" font-weight="600" text-anchor="middle">EVALUATING</text>
+        <text x="371" y="170" fill="#67e8f9" font-size="8" text-anchor="middle">score vs threshold</text>
+        <path d="M 456 145 Q 550 86 645 127" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah59)"/>
+        <text x="548" y="86" fill="#34d399" font-size="9">score >= threshold</text>
+        <rect x="645" y="98" width="160" height="56" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="725" y="132" fill="white" font-size="10" font-weight="600" text-anchor="middle">APPROVED</text>
+        <path d="M 456 174 Q 550 232 645 193" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah59)"/>
+        <text x="548" y="238" fill="#fbbf24" font-size="9">score &lt; threshold</text>
+        <rect x="645" y="164" width="190" height="56" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="740" y="188" fill="white" font-size="9" font-weight="600" text-anchor="middle">NEEDS_REVISION</text>
+        <text x="740" y="204" fill="white" font-size="9" font-weight="600" text-anchor="middle">attempt + 1</text>
+        <path d="M 645 193 Q 512 275 371 186" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah59)"/>
+        <text x="516" y="289" fill="#c4b5fd" font-size="9">loop back for next draft</text>
+        <path d="M 835 193 Q 894 193 936 228" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah59)"/>
+        <rect x="838" y="228" width="128" height="56" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="902" y="262" fill="white" font-size="10" font-weight="600" text-anchor="middle">REJECTED</text>
+      </svg>
+      <p class="diagram-caption">DRAFT → EVALUATING → APPROVED OR NEEDS_REVISION LOOP → REJECTED AT ATTEMPT CAP</p>
+    </div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass
+from enum import Enum
+
+class EvalState(str, Enum):
+    DRAFT = "draft"
+    EVALUATING = "evaluating"
+    NEEDS_REVISION = "needs_revision"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+@dataclass
+class EvalContext:
+    attempt: int
+    max_attempts: int
+    score: float
+    threshold: float
+    state: EvalState = EvalState.DRAFT
+
+def step(context: EvalContext) -&gt; EvalContext:
+    if context.state == EvalState.DRAFT:
+        context.state = EvalState.EVALUATING
+        return context
+    if context.state == EvalState.EVALUATING:
+        if context.score &gt;= context.threshold:
+            context.state = EvalState.APPROVED
+            return context
+        if context.attempt &gt;= context.max_attempts:
+            context.state = EvalState.REJECTED
+        else:
+            context.attempt += 1
+            context.state = EvalState.NEEDS_REVISION
+        return context
+    if context.state == EvalState.NEEDS_REVISION:
+        context.state = EvalState.DRAFT
+    return context</code></pre></div>
+
+    <blockquote>The graph decides the operation. The model contributes inside the operation.</blockquote>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> and Skill Reporter use explicit evaluator states in the quality harness (snapshot, replay, assert, archive) so release decisions are traceable and replayable under retry pressure.</div>
+  </article>
+
+  <!-- LESSON 60 -->
+  <article class="lesson" id="lesson-60">
+    <span class="lesson-tag">Lesson 60</span>
+    <h3>Human-in-the-Loop Gate for High-Risk Actions</h3>
+    <div class="problem"><b>The problem:</b> retry logic and evaluator routing still do not answer who is allowed to execute high-risk actions. Without an explicit gate, an agent can run side effects directly from model output. Eunomia and Skill Reporter need a deterministic approval boundary before execution.</div>
+
+    <p>The gate policy is explicit and auditable: low risk with high confidence can auto-approve, low confidence can auto-reject, and high-risk actions must remain pending until a human reviewer approves or rejects them.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 300">
+        <defs><marker id="ah60" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="40" y="120" width="170" height="62" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="125" y="146" fill="white" font-size="11" font-weight="600" text-anchor="middle">Action proposal</text>
+        <text x="125" y="163" fill="#94a3b8" font-size="9" text-anchor="middle">risk tier + confidence</text>
+        <line x1="210" y1="151" x2="280" y2="151" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah60)"/>
+        <rect x="282" y="105" width="210" height="92" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="387" y="132" fill="white" font-size="11" font-weight="600" text-anchor="middle">Deterministic gate</text>
+        <text x="387" y="151" fill="#c4b5fd" font-size="9" text-anchor="middle">auto-approve / reject / pending</text>
+        <text x="387" y="168" fill="#c4b5fd" font-size="9" text-anchor="middle">based on risk + confidence</text>
+        <path d="M 492 128 Q 565 88 650 112" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah60)"/>
+        <text x="570" y="92" fill="#34d399" font-size="9">auto path</text>
+        <path d="M 492 174 Q 565 214 650 190" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah60)"/>
+        <text x="570" y="224" fill="#fbbf24" font-size="9">human review path</text>
+        <rect x="650" y="80" width="145" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="722" y="112" fill="white" font-size="10" font-weight="600" text-anchor="middle">Execute action</text>
+        <rect x="650" y="161" width="145" height="58" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="722" y="193" fill="white" font-size="10" font-weight="600" text-anchor="middle">Pending review</text>
+        <line x1="795" y1="190" x2="875" y2="190" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah60)"/>
+        <rect x="875" y="161" width="90" height="58" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="920" y="185" fill="white" font-size="9" font-weight="600" text-anchor="middle">Human</text>
+        <text x="920" y="198" fill="white" font-size="9" font-weight="600" text-anchor="middle">approve/reject</text>
+      </svg>
+      <p class="diagram-caption">ACTION PROPOSAL → DETERMINISTIC GATE → AUTO EXECUTE OR HUMAN REVIEW → EXPLICIT APPROVE/REJECT OUTCOME</p>
+    </div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>if proposal.risk_tier == RiskTier.LOW and proposal.confidence &gt;= 0.7:
+    return GateOutcome(status=GateStatus.AUTO_APPROVED, executed=True, reason="low risk and high confidence")
+
+if proposal.risk_tier == RiskTier.HIGH and reviewer is None:
+    return GateOutcome(status=GateStatus.PENDING_REVIEW, executed=False, reason="human approval required")
+
+if reviewer and reviewer.approved:
+    return GateOutcome(status=GateStatus.HUMAN_APPROVED, executed=True, reason="approved by reviewer")
+
+return GateOutcome(status=GateStatus.HUMAN_REJECTED, executed=False, reason="rejected by reviewer")</code></pre></div>
+
+    <blockquote>Model output may propose high-risk actions. Only explicit human approval may execute them.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> when "pending review" is represented as an explicit machine state, high-risk actions cannot execute accidentally while waiting for a reviewer decision. This removes hidden side effects from retry paths.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s read-only first release has no high-impact side effects to gate at runtime; its human decision boundaries are the required reviewer on production deploys and the person at the bottom of the answer sequence. This per-action gate is deferred to the write actions of a later release, and Skill Reporter defers it the same way.</div>
+  </article>
+
+  <!-- LESSON 61 -->
+  <article class="lesson" id="lesson-61">
+    <span class="lesson-tag">Lesson 61</span>
+    <h3>Idempotent Approval Execution Ledger</h3>
+    <div class="problem"><b>The problem:</b> human approval alone does not stop duplicate side effects when clients retry the same approved action. Without a once-only execution ledger, a network retry can submit the same high-risk transfer twice.</div>
+
+    <p>The control is deterministic: missing decisions block execution, rejected decisions block execution, first approved call executes, and every replay with the same approval id returns the original execution id without running side effects again.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 300">
+        <defs><marker id="ah61" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="40" y="121" width="170" height="60" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="125" y="145" fill="white" font-size="10" font-weight="600" text-anchor="middle">Approval decision</text>
+        <text x="125" y="162" fill="#94a3b8" font-size="9" text-anchor="middle">approved or rejected</text>
+        <line x1="210" y1="151" x2="290" y2="151" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah61)"/>
+        <rect x="292" y="106" width="225" height="92" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="404" y="133" fill="white" font-size="11" font-weight="600" text-anchor="middle">Execution ledger</text>
+        <text x="404" y="151" fill="#c4b5fd" font-size="9" text-anchor="middle">key: approval_id</text>
+        <text x="404" y="168" fill="#c4b5fd" font-size="9" text-anchor="middle">first write wins</text>
+        <path d="M 517 130 Q 600 92 690 112" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah61)"/>
+        <text x="597" y="92" fill="#34d399" font-size="9">first approved call</text>
+        <path d="M 517 176 Q 602 214 690 190" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#ah61)"/>
+        <text x="600" y="224" fill="#f59e0b" font-size="9">same id replay</text>
+        <rect x="690" y="79" width="163" height="60" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="772" y="111" fill="white" font-size="10" font-weight="600" text-anchor="middle">Execute side effect</text>
+        <rect x="690" y="161" width="220" height="60" rx="8" fill="rgba(120,53,15,0.3)" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="800" y="186" fill="white" font-size="10" font-weight="600" text-anchor="middle">Replay response only</text>
+        <text x="800" y="203" fill="#fde68a" font-size="9" text-anchor="middle">reuse original execution_id</text>
+      </svg>
+      <p class="diagram-caption">APPROVAL DECISION → EXECUTION LEDGER (APPROVAL-ID KEY) → EXECUTE ONCE OR RETURN REPLAY</p>
+    </div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>existing_execution_id = self._executions.get(approval_id)
+if existing_execution_id is not None:
+    return ExecutionOutcome(
+        status=ExecuteStatus.DUPLICATE_REPLAY,
+        executed=False,
+        execution_id=existing_execution_id,
+        reason="already executed for this approval id",
+    )
+
+side_effect()
+execution_id = f"exec-{approval_id}"
+self._executions[approval_id] = execution_id</code></pre></div>
+
+    <blockquote>Approval controls who may execute. Idempotency controls how many times execution may happen.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> retrying the same approved request returned <code class="inline">duplicate_replay</code> and the original execution id while side effects stayed at one call.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s read-only first release executes no high-risk actions, so it needs no execution ledger yet. When write actions arrive, Eunomia and Skill Reporter will pair this ledger with human approval so each high-risk action is both authorized and once-only.</div>
+  </article>
+
+  <!-- LESSON 62 -->
+  <article class="lesson" id="lesson-62">
+    <span class="lesson-tag">Lesson 62</span>
+    <h3>Request-Scoped Degradation Visibility</h3>
+    <div class="problem"><b>The problem:</b> fallbacks keep the service running, but silent fallbacks hide risk. If classifier or retrieval failures are not captured per request, operators cannot explain why answer quality changed or why a rollout should pause.</div>
+
+    <p>The fix is a request-scoped degradation trace. Each degraded component writes a structured event with component name, reason, severity, and fallback path. The reply can still return safely, but degraded execution remains explicit and auditable.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1000 300">
+        <defs><marker id="ah62" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="40" y="122" width="170" height="60" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="125" y="146" fill="white" font-size="10" font-weight="600" text-anchor="middle">Incoming request</text>
+        <text x="125" y="163" fill="#94a3b8" font-size="9" text-anchor="middle">request_id scoped</text>
+        <line x1="210" y1="152" x2="290" y2="152" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah62)"/>
+        <rect x="292" y="106" width="235" height="92" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="409" y="132" fill="white" font-size="11" font-weight="600" text-anchor="middle">Degradation log</text>
+        <text x="409" y="150" fill="#c4b5fd" font-size="9" text-anchor="middle">component + reason + severity</text>
+        <text x="409" y="168" fill="#c4b5fd" font-size="9" text-anchor="middle">fallback metadata</text>
+        <path d="M 527 132 Q 615 95 708 114" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#ah62)"/>
+        <text x="615" y="90" fill="#f59e0b" font-size="9">degradation event</text>
+        <rect x="710" y="84" width="220" height="58" rx="8" fill="rgba(120,53,15,0.3)" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="820" y="109" fill="white" font-size="10" font-weight="600" text-anchor="middle">Request trace events</text>
+        <text x="820" y="126" fill="#fde68a" font-size="9" text-anchor="middle">for ops and release gates</text>
+        <path d="M 527 172 Q 615 211 708 192" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah62)"/>
+        <text x="613" y="226" fill="#34d399" font-size="9">safe fallback reply</text>
+        <rect x="710" y="162" width="220" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="820" y="187" fill="white" font-size="10" font-weight="600" text-anchor="middle">User response</text>
+        <text x="820" y="204" fill="#86efac" font-size="9" text-anchor="middle">available but flagged degraded</text>
+      </svg>
+      <p class="diagram-caption">REQUEST → DEGRADATION LOG → (A) TRACE EVENTS FOR OPERATIONS + (B) SAFE FALLBACK RESPONSE</p>
+    </div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>try:
+    intent = classify_intent(question)
+except ClassifierTimeout as error:
+    trace.record(
+        component="intent_classifier",
+        reason=str(error),
+        severity=DegradationSeverity.MEDIUM,
+        fallback_used="rule_based_intent=faq",
+    )
+    intent = "faq"
+
+try:
+    context = retrieve_context(question)
+except RetrievalUnavailable as error:
+    trace.record(
+        component="retrieval",
+        reason=str(error),
+        severity=DegradationSeverity.HIGH,
+        fallback_used="safe_no_context_answer",
+    )</code></pre></div>
+
+    <blockquote>Fail gracefully, but never fail silently.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> one request can degrade in more than one component. Capturing only a single boolean loses incident detail and weakens release decisions.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> and Skill Reporter record request-scoped degradation events — each answer step tried and each provider fallback, per turn, through the trace sink — to connect runtime fallbacks to eval outcomes and operational triage.</div>
+  </article>
+
+  <!-- LESSON 63 -->
+  <article class="lesson" id="lesson-63">
+    <span class="lesson-tag">Lesson 63</span>
+    <h3>Bounded Agent Loop Budget &amp; Step Authority</h3>
+    <div class="problem"><b>The problem:</b> autonomous tool loops can overrun if there is no hard step cap, and they can still execute out-of-scope tools if authority is checked too late or not checked per step.</div>
+
+    <p>The fix is to enforce two controls at the same runtime boundary: a strict <code class="inline">max_steps</code> budget and a step-by-step tool authority check tied to request intent. The loop stops with an explicit reason: completed, budget exhausted, or authority denied.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1040 310">
+        <defs><marker id="ah63" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="40" y="124" width="160" height="60" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="120" y="149" fill="white" font-size="10" font-weight="600" text-anchor="middle">Planned tools</text>
+        <text x="120" y="166" fill="#94a3b8" font-size="9" text-anchor="middle">step sequence</text>
+
+        <line x1="200" y1="154" x2="290" y2="154" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah63)"/>
+        <rect x="292" y="92" width="260" height="124" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="422" y="121" fill="white" font-size="11" font-weight="600" text-anchor="middle">Loop guard</text>
+        <text x="422" y="141" fill="#c4b5fd" font-size="9" text-anchor="middle">1) step &lt;= max_steps</text>
+        <text x="422" y="159" fill="#c4b5fd" font-size="9" text-anchor="middle">2) tool allowed for intent</text>
+        <text x="422" y="177" fill="#c4b5fd" font-size="9" text-anchor="middle">3) execute or stop with reason</text>
+
+        <path d="M 552 120 Q 645 90 730 110" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah63)"/>
+        <rect x="732" y="81" width="250" height="58" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="857" y="106" fill="white" font-size="10" font-weight="600" text-anchor="middle">completed</text>
+        <text x="857" y="123" fill="#86efac" font-size="9" text-anchor="middle">all steps valid and in budget</text>
+
+        <path d="M 552 153 Q 645 154 730 154" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#ah63)"/>
+        <rect x="732" y="125" width="250" height="58" rx="8" fill="rgba(120,53,15,0.3)" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="857" y="149" fill="white" font-size="10" font-weight="600" text-anchor="middle">budget_exhausted</text>
+        <text x="857" y="166" fill="#fde68a" font-size="9" text-anchor="middle">max step boundary reached</text>
+
+        <path d="M 552 186 Q 645 220 730 198" fill="none" stroke="#f43f5e" stroke-width="1.5" marker-end="url(#ah63)"/>
+        <rect x="732" y="170" width="250" height="58" rx="8" fill="rgba(136,19,55,0.35)" stroke="#f43f5e" stroke-width="1.5"/>
+        <text x="857" y="194" fill="white" font-size="10" font-weight="600" text-anchor="middle">authority_denied</text>
+        <text x="857" y="211" fill="#fda4af" font-size="9" text-anchor="middle">tool not allowed for intent</text>
+      </svg>
+      <p class="diagram-caption">PLANNED TOOL STEPS → LOOP GUARD (BUDGET + AUTHORITY) → COMPLETED OR EXPLICIT STOP REASON</p>
+    </div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>for index, tool in enumerate(planned_tools):
+    step = index + 1
+    if step &gt; max_steps:
+        return LoopOutcome(status=LoopStatus.BUDGET_EXHAUSTED, ...)
+
+    if not is_allowed(intent, tool):
+        return LoopOutcome(status=LoopStatus.AUTHORITY_DENIED, ...)
+
+    execute_tool(tool)</code></pre></div>
+
+    <blockquote>Bound autonomy is safer autonomy.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the same run can be both short and unsafe. A low step count does not prove safety if authority checks are not enforced at each step.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release gives the model no multi-step tool loop: the service gathers the evidence, and on the composed step the model may request at most one more read-only capability call. That is this lesson's guard in its tightest form: a step budget of one, and only the three read-only capabilities allowed. If a longer loop is added later, Eunomia checks before each call that (1) it is still inside the max-step budget and (2) the tool is allowed for this question type by policy, and stops the loop if either check fails.</div>
+  </article>
+
+  <!-- LESSON 64 -->
+  <article class="lesson" id="lesson-64">
+    <span class="lesson-tag">Lesson 64</span>
+    <h3>Jev-Style Decision Layer for Agent Routing</h3>
+    <div class="problem"><b>The problem:</b> forcing one intent choice on mixed high-risk prompts can produce confident-looking misroutes. In Eunomia, a wrong route can be worse than pausing for clarification.</div>
+
+    <p>The fix is a decision-first route layer: score all allowed intents, pick a typed route, attach a confidence score, and escalate to <code class="inline">unknown</code> when confidence is below threshold. In this lesson, the Jev pattern is demonstrated with a deterministic in-repo approximation so it is fully runnable offline: no external Jev API call is required for the benchmark.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>def route_with_jev_confidence(message: str, min_confidence: float = 0.45) -> RoutedDecision:
+    raw = jev_style_raw_decision(message)
+    if raw.confidence &lt; min_confidence and raw.intent != Intent.UNKNOWN:
+        return RoutedDecision(intent=Intent.UNKNOWN, confidence=raw.confidence, escalated=True)
+    return RoutedDecision(intent=raw.intent, confidence=raw.confidence, escalated=False)
+</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>function routeWithJevConfidence(message: string, minConfidence = 0.45): RoutedDecision {
+  const raw = jevStyleRawDecision(message);
+  if (raw.confidence &lt; minConfidence && raw.intent !== "unknown") {
+    return { intent: "unknown", confidence: raw.confidence, escalated: true };
+  }
+  return { intent: raw.intent, confidence: raw.confidence, escalated: false };
+}
+</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>function jevStyleRawDecision(message: string): Decision {
+  const text = message.toLowerCase();
+  const scores: Record&lt;Intent, number&gt; = {
+    balance: 0.01,
+    coverage: 0.01,
+    products: 0.01,
+    faq: 0.01,
+    simulation: 0.01,
+    portfolio: 0.01,
+    unknown: 0.01,
+  };
+
+  if (text.includes("simulate") || text.includes("simulation") || text.includes("projection") || text.includes("what-if")) {
+    scores.simulation += 0.95;
+  }
+  if (text.includes("portfolio") || text.includes("optimise") || text.includes("optimize")) {
+    scores.portfolio += 0.95;
+  }
+  if (text.includes("cover") || text.includes("safe") || text.includes("fscs") || text.includes("coverage")) {
+    scores.coverage += 0.85;
+  }
+
+  const total = Object.values(scores).reduce((sum, value) =&gt; sum + value, 0);
+  const probabilities = Object.entries(scores).map(([intent, score]) =&gt; ({
+    intent: intent as Intent,
+    probability: score / total,
+  }));
+  probabilities.sort((a, b) =&gt; b.probability - a.probability);
+
+  return {
+    intent: probabilities[0]?.intent ?? "unknown",
+    confidence: probabilities[0]?.probability ?? 0,
+  };
+}
+</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 980 300" role="img" aria-label="Decision-first routing with confidence gate">
+        <defs><marker id="ah64" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="40" y="120" width="170" height="60" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/>
+        <text x="125" y="146" fill="white" font-size="11" text-anchor="middle">User request</text>
+        <text x="125" y="164" fill="#94a3b8" font-size="9" text-anchor="middle">possibly mixed intent</text>
+
+        <line x1="210" y1="150" x2="310" y2="150" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah64)"/>
+        <rect x="312" y="98" width="230" height="104" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa"/>
+        <text x="427" y="126" fill="white" font-size="11" text-anchor="middle">Typed route decision</text>
+        <text x="427" y="146" fill="#c4b5fd" font-size="9" text-anchor="middle">intent + confidence</text>
+        <text x="427" y="164" fill="#c4b5fd" font-size="9" text-anchor="middle">from fixed option set</text>
+
+        <line x1="542" y1="150" x2="630" y2="150" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah64)"/>
+        <polygon points="700,90 770,150 700,210 630,150" fill="rgba(120,53,15,0.3)" stroke="#fbbf24"/>
+        <text x="700" y="145" fill="white" font-size="10" text-anchor="middle">confidence</text>
+        <text x="700" y="162" fill="white" font-size="10" text-anchor="middle">≥ threshold?</text>
+
+        <line x1="770" y1="150" x2="860" y2="150" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah64)"/>
+        <text x="814" y="138" fill="#34d399" font-size="9" text-anchor="middle">yes</text>
+        <rect x="862" y="120" width="90" height="60" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+        <text x="907" y="146" fill="white" font-size="10" text-anchor="middle">route to</text>
+        <text x="907" y="164" fill="white" font-size="10" text-anchor="middle">policy/tool</text>
+
+        <path d="M700 210 L700 256 L525 256 L525 206" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah64)"/>
+        <text x="715" y="236" fill="#fb7185" font-size="9">no</text>
+        <rect x="420" y="208" width="210" height="60" rx="8" fill="rgba(136,19,55,0.3)" stroke="#fb7185"/>
+        <text x="525" y="234" fill="white" font-size="10" text-anchor="middle">escalate to unknown</text>
+        <text x="525" y="252" fill="#fda4af" font-size="9" text-anchor="middle">safe abstain path</text>
+      </svg>
+      <p class="diagram-caption">FIXED INTENT OPTIONS → SCORED DECISION + CONFIDENCE → ROUTE ONLY IF ABOVE THRESHOLD; OTHERWISE ESCALATE</p>
+    </div>
+
+    <p><b>Before/after in this run:</b> baseline keyword routing reached <code class="inline">accuracy=0.73</code> with <code class="inline">high_risk_misroutes=2</code>. The Jev-style decision layer reached <code class="inline">accuracy=1.00</code> with <code class="inline">high_risk_misroutes=0</code>, and it used one explicit escalation on a low-confidence mixed-intent case. On the current Eunomia eval corpus, the result is parity (1.00 → 1.00 accuracy, 0 → 0 high-risk misroutes), which means no demonstrated gain there yet and no regression.</p>
+
+    <h4>Why substring checks rather than regex?</h4>
+    <p>Python uses <code class="inline">in</code>; TypeScript uses <code class="inline">includes()</code>. These keep the keyword-to-score rules easy to read. Both substring checks and regex are deterministic. Substrings can create false matches: “balance” matches “balanced”, and “rate” matches “corporate”. Whole-word regex can prevent some of these mistakes, but neither approach understands negation or intent. These heuristic scores are not calibrated probabilities.</p>
+    <h4>If using a real Jev API</h4>
+    <p>This is an optional integration description, not implemented API behavior. No paid calls are made by the lesson. Through an approved gateway, send a server-side authenticated request to the documented TypeSafe <code class="inline">POST /v1/systemone</code> endpoint with <code class="inline">model</code>, <code class="inline">state</code>, and a <code class="inline">questions.route</code> Choice question whose criteria describe the allowed intents. Read and validate <code class="inline">answers.route.choice</code> and <code class="inline">answers.route.confidence</code>, then apply the local gate before policy and tool authorization. Re-evaluate the threshold: Jev confidence differs from our normalized keyword score. For sensitive requests, API failure means abstaining to unknown, not blindly trusting the keyword fallback. See the <a href="https://docs.typesafe.ai/api">TypeSafe API reference</a> and <a href="https://docs.typesafe.ai/confidence">confidence documentation</a>.</p>
+
+    <blockquote>When uncertainty is high, refusing to guess is a safety feature.</blockquote>
+
+    <div class="capstone-tie"><b>In the capstone:</b> decision-first routing becomes <b>Eunomia</b>'s routing policy table: a typed question type plus a confidence threshold picks the starting answer step before any evidence is gathered, and a low-confidence or mixed high-risk message goes to a person. Decision first, policy second, execution third.</div>
+  </article>
+</section>

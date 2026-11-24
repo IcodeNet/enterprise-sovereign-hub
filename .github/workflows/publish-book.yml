@@ -1,0 +1,70 @@
+name: Publish Book to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "book/**"
+      - ".github/workflows/publish-book.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify the book's referenced assets exist
+        run: |
+          set -euo pipefail
+          test -f book/building-trustworthy-ai-agents.html
+          # extract every relative (non-http, non-#) asset the book references and confirm it's on disk
+          grep -oE '(src|href)="[^"#][^"]*\.(svg|png|jpg|jpeg|woff2?|css|js)"' book/building-trustworthy-ai-agents.html \
+            | sed -E 's/^(src|href)="//; s/"$//' | sort -u | while read -r asset; do
+              if [ ! -f "book/$asset" ]; then
+                echo "::error::book references '$asset' but book/$asset does not exist on disk"
+                exit 1
+              fi
+            done
+
+      - name: Stage the book as the Pages site root
+        run: |
+          mkdir -p _site
+          cp book/building-trustworthy-ai-agents.html _site/index.html
+          # copy every relative asset the book references, so nothing 404s on the live site
+          grep -oE '(src|href)="[^"#][^"]*\.(svg|png|jpg|jpeg|woff2?|css|js)"' book/building-trustworthy-ai-agents.html \
+            | sed -E 's/^(src|href)="//; s/"$//' | sort -u | while read -r asset; do
+              mkdir -p "_site/$(dirname "$asset")"
+              cp "book/$asset" "_site/$asset"
+            done
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Move the book tag to this commit
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f book -m "Auto-moved by publish-book.yml: book Pages publish verified at $GITHUB_SHA"
+          git push origin book --force

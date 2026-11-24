@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Building Trustworthy AI Agents — A Field Guide, by icode.net</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #020617;
+    --panel: rgba(15, 23, 42, 0.55);
+    --panel-solid: #0f172a;
+    --border: #1e293b;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --faint: #475569;
+    --cyan: #22d3ee;
+    --emerald: #34d399;
+    --violet: #a78bfa;
+    --amber: #fbbf24;
+    --rose: #fb7185;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+  }
+  code, pre, .mono { font-family: 'JetBrains Mono', monospace; }
+
+  /* ---------- macOS-style thin, rounded, overlay scrollbars ---------- */
+  html { scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, 0.35) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.35);
+    border-radius: 9px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: rgba(148, 163, 184, 0.6); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+
+  /* ---------- GitHub repo link, fixed top-right ---------- */
+  .github-link {
+    position: fixed; top: 1rem; right: 1.25rem; z-index: 50;
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.45rem 0.9rem; border-radius: 999px;
+    background: rgba(15, 23, 42, 0.85); border: 1px solid var(--border);
+    color: var(--muted); text-decoration: none; font-size: 0.8rem; font-weight: 600;
+    backdrop-filter: blur(6px);
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .github-link:hover { color: var(--text); border-color: var(--cyan); background: rgba(15, 23, 42, 0.95); }
+  .github-link svg { width: 18px; height: 18px; fill: currentColor; }
+
+  /* ---------- Layout shell ---------- */
+  .shell { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; transition: grid-template-columns 0.2s ease; }
+  .sidebar-toggle {
+    width: 100%; display: inline-flex; align-items: center; gap: 0.5rem;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--muted);
+    background: rgba(30,41,59,0.8); border: 1px solid var(--border);
+    border-radius: 0.45rem; padding: 0.35rem 0.55rem; margin-bottom: 0.9rem;
+    cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .sidebar-toggle:hover { background: rgba(34,211,238,0.15); color: var(--cyan); border-color: var(--cyan); }
+  .sidebar-toggle .toggle-icon { font-size: 0.85rem; line-height: 1; }
+  .toc {
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    border-right: 1px solid var(--border);
+    padding: 1.75rem 1.25rem 3rem;
+    background: rgba(2, 6, 23, 0.9);
+  }
+  .toc-brand { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1.5rem; text-decoration: none; }
+  .toc-brand img { width: 34px; height: 34px; }
+  .toc-brand .brand-text { font-family: 'JetBrains Mono', monospace; font-size: 0.95rem; font-weight: 700; color: var(--text); }
+  .toc-brand .brand-text span { color: var(--cyan); }
+  .toc h4 {
+    font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--faint); margin: 1.4rem 0 0.5rem;
+  }
+  .toc ul { list-style: none; }
+  .toc li { margin-bottom: 0.15rem; }
+  .toc a {
+    display: block; color: var(--muted); text-decoration: none; font-size: 0.825rem;
+    padding: 0.28rem 0.5rem; border-radius: 0.4rem; transition: background 0.15s, color 0.15s;
+  }
+  .toc a:hover { background: rgba(34, 211, 238, 0.08); color: var(--text); }
+  .toc .toc-part-link { font-weight: 700; color: var(--text); font-size: 0.85rem; }
+
+  body.sidebar-collapsed .shell { grid-template-columns: 68px 1fr; }
+  body.sidebar-collapsed .toc { padding: 1rem 0.55rem 1.5rem; }
+  body.sidebar-collapsed .toc h4,
+  body.sidebar-collapsed .toc ul,
+  body.sidebar-collapsed .toc .toc-brand .brand-text,
+  body.sidebar-collapsed .toc .toc-brand img {
+    display: none;
+  }
+  body.sidebar-collapsed .toc .toc-brand { margin-bottom: 0.65rem; justify-content: center; }
+  body.sidebar-collapsed .toc .sidebar-toggle { justify-content: center; margin-bottom: 0; }
+  body.sidebar-collapsed .toc .sidebar-toggle .toggle-label { display: none; }
+
+  main { padding: 0; max-width: 920px; margin: 0 auto; }
+
+  /* ---------- Cover ---------- */
+  .cover {
+    min-height: 100vh; display: flex; flex-direction: column; justify-content: center;
+    align-items: center; text-align: center; padding: 4rem 2rem;
+    background:
+      radial-gradient(circle at 50% 20%, rgba(34,211,238,0.12), transparent 60%),
+      linear-gradient(180deg, #020617 0%, #050b1f 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  .cover img.logo { width: 120px; height: 120px; margin-bottom: 1.75rem; }
+  .cover .kicker {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; letter-spacing: 0.15em;
+    text-transform: uppercase; color: var(--cyan); margin-bottom: 1rem;
+  }
+  .cover h1 {
+    font-size: 2.9rem; font-weight: 800; letter-spacing: -0.02em; max-width: 780px;
+    background: linear-gradient(135deg, #f8fafc, #cbd5e1);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .cover .subtitle { font-size: 1.2rem; color: var(--muted); max-width: 640px; margin: 1.25rem 0 2rem; }
+  .cover .meta-row { display: flex; gap: 1.5rem; flex-wrap: wrap; justify-content: center; }
+  .pill {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--muted);
+    border: 1px solid var(--border); padding: 0.4rem 0.9rem; border-radius: 999px;
+    background: rgba(15,23,42,0.6);
+  }
+  .pill b { color: var(--emerald); }
+
+  /* ---------- Content sections ---------- */
+  section.part {
+    padding: 4.5rem 2.5rem 1rem; border-bottom: 1px solid var(--border);
+  }
+  .part-header { margin-bottom: 2.5rem; }
+  .part-eyebrow {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--cyan);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.6rem;
+  }
+  .part-header h2 { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.01em; }
+  .part-intro { color: var(--muted); font-size: 1.05rem; margin-top: 1rem; max-width: 760px; }
+
+  article.lesson { padding: 2.5rem 0; border-top: 1px dashed var(--border); }
+  article.lesson:first-of-type { border-top: none; }
+  .lesson-tag {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--bg);
+    background: var(--cyan); padding: 0.25rem 0.7rem; border-radius: 999px; font-weight: 700;
+    margin-bottom: 0.9rem;
+  }
+  .lesson h3 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.9rem; letter-spacing: -0.01em; }
+  .lesson .problem {
+    background: rgba(251, 191, 36, 0.07); border-left: 3px solid var(--amber);
+    padding: 1rem 1.25rem; border-radius: 0 0.5rem 0.5rem 0; margin-bottom: 1.4rem; color: #fde68a;
+    font-size: 0.98rem;
+  }
+  .lesson .problem b { color: var(--amber); }
+  .lesson p { margin-bottom: 1.1rem; color: #cbd5e1; font-size: 1rem; }
+  .lesson .jargon {
+    display: inline; background: rgba(167, 139, 250, 0.14); color: var(--violet);
+    padding: 0.05rem 0.35rem; border-radius: 0.3rem; font-weight: 600; font-size: 0.95em;
+  }
+  .lesson .finding {
+    background: rgba(52, 211, 153, 0.07); border-left: 3px solid var(--emerald);
+    padding: 1rem 1.25rem; border-radius: 0 0.5rem 0.5rem 0; margin: 1.4rem 0; font-size: 0.95rem;
+  }
+  .lesson .finding b { color: var(--emerald); }
+  .lesson .capstone-tie {
+    background: rgba(34, 211, 238, 0.07); border-left: 3px solid var(--cyan);
+    padding: 1rem 1.25rem; border-radius: 0 0.5rem 0.5rem 0; margin-top: 1.4rem; font-size: 0.95rem;
+  }
+  .lesson .capstone-tie b { color: var(--cyan); }
+  .diagram-wrap {
+    background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); border-radius: 0.75rem;
+    padding: 1.25rem; margin: 1.5rem 0; overflow-x: auto;
+  }
+  .diagram-wrap svg { width: 100%; min-width: 560px; display: block; }
+  .diagram-caption { font-size: 0.8rem; color: var(--faint); margin-top: 0.6rem; text-align: center; font-family: 'JetBrains Mono', monospace; }
+
+  code.inline { background: rgba(148,163,184,0.12); padding: 0.1rem 0.4rem; border-radius: 0.3rem; font-size: 0.88em; color: #a5f3fc; }
+
+  /* ---------- Copyable, language-tagged code blocks ---------- */
+  .code-wrap { position: relative; margin: 1.2rem 0; }
+  .code-wrap .code-lang {
+    position: absolute; top: 0.6rem; left: 1.1rem; font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint);
+    pointer-events: none;
+  }
+  .code-wrap .copy-btn {
+    position: absolute; top: 0.55rem; right: 0.7rem; font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem; color: var(--muted); background: rgba(30,41,59,0.8); border: 1px solid var(--border);
+    border-radius: 0.35rem; padding: 0.25rem 0.6rem; cursor: pointer; transition: background 0.15s, color 0.15s;
+  }
+  .code-wrap .copy-btn:hover { background: rgba(34,211,238,0.15); color: var(--cyan); border-color: var(--cyan); }
+  .code-wrap .copy-btn.copied { background: rgba(52,211,153,0.18); color: var(--emerald); border-color: var(--emerald); }
+  pre.code-block {
+    background: #0a0f1f; border: 1px solid var(--border); border-radius: 0.6rem;
+    padding: 2.1rem 1.3rem 1.1rem; overflow-x: auto; font-size: 0.82rem; line-height: 1.6; margin: 0; color: #c7d2fe;
+  }
+  pre.code-block code { font-family: 'JetBrains Mono', monospace; white-space: pre; }
+  /* Minimal built-in highlighting (no external library/CDN dependency) */
+  pre.code-block .tok-kw   { color: #a78bfa; font-weight: 600; }
+  pre.code-block .tok-str  { color: #86efac; }
+  pre.code-block .tok-com  { color: #64748b; font-style: italic; }
+  pre.code-block .tok-num  { color: #fbbf24; }
+  pre.code-block .tok-fn   { color: #67e8f9; }
+  pre.code-block .tok-type { color: #fda4af; }
+
+  .footer-page {
+    text-align: center; padding: 3rem 2rem; color: var(--faint); font-size: 0.85rem;
+  }
+  .footer-page a { color: var(--cyan); text-decoration: none; }
+  .footer-page img { width: 44px; height: 44px; margin-bottom: 0.75rem; opacity: 0.85; }
+
+  blockquote {
+    border-left: 3px solid var(--rose); padding: 0.8rem 1.2rem; margin: 1.4rem 0;
+    background: rgba(251, 113, 133, 0.06); color: #fecdd3; font-size: 0.95rem; border-radius: 0 0.5rem 0.5rem 0;
+  }
+
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+    .toc { position: relative; height: auto; }
+    body.sidebar-collapsed .shell { grid-template-columns: 1fr; }
+    body.sidebar-collapsed .toc h4,
+    body.sidebar-collapsed .toc ul,
+    body.sidebar-collapsed .toc .toc-brand .brand-text,
+    body.sidebar-collapsed .toc .toc-brand img { display: initial; }
+    body.sidebar-collapsed .toc .toc-brand { margin-bottom: 1.5rem; justify-content: flex-start; }
+    body.sidebar-collapsed .toc .sidebar-toggle { justify-content: flex-start; margin-bottom: 0.9rem; }
+    body.sidebar-collapsed .toc .sidebar-toggle .toggle-label { display: inline; }
+    section.part { padding: 3rem 1.25rem; }
+  }
+</style>
+</head>
+<body>
+
+<a class="github-link" href="https://github.com/IcodeNet/enterprise-sovereign-hub" target="_blank" rel="noopener noreferrer">
+  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+  <span>View on GitHub</span>
+</a>
+
+<div class="shell">
+  <!-- ======================= TABLE OF CONTENTS ======================= -->
+  <nav class="toc" id="book-toc">
+    <button class="sidebar-toggle" type="button" aria-controls="book-toc" aria-expanded="true" aria-label="Collapse sidebar">
+      <span class="toggle-icon">☰</span>
+      <span class="toggle-label">Collapse sidebar</span>
+    </button>
+    <a href="#cover" class="toc-brand">
+      <img src="icode-logo.svg" alt="icode.net logo">
+      <span class="brand-text">icode<span>.net</span></span>
+    </a>
+
+    <h4>Front Matter</h4>
+    <ul>
+      <li><a href="#cover">Cover</a></li>
+      <li><a href="#how-to-read">How to Read This Book</a></li>
+    </ul>
+
+    <h4>Part I</h4>
+    <ul>
+      <li><a href="#part-1" class="toc-part-link">Foundations of a Type-Safe Agent</a></li>
+      <li><a href="#lesson-1">1. Type-Safe Agent Foundations</a></li>
+      <li><a href="#lesson-2">2. Dynamic Dependencies &amp; Tool Calling</a></li>
+      <li><a href="#lesson-3">3. Streaming Replies</a></li>
+      <li><a href="#lesson-4">4. Grounded Answers (RAG)</a></li>
+      <li><a href="#lesson-5">5. Stateful Agent Graphs</a></li>
+    </ul>
+
+    <h4>Part II</h4>
+    <ul>
+      <li><a href="#part-2" class="toc-part-link">Tools at Scale (Protocols)</a></li>
+      <li><a href="#lesson-6">6. FastMCP Server Architecture</a></li>
+      <li><a href="#lesson-23">23. Dynamic Tool Discovery</a></li>
+      <li><a href="#lesson-32">32. Real-Time Resource Subscriptions</a></li>
+      <li><a href="#lesson-33">33. Dynamic Tool Synthesis</a></li>
+      <li><a href="#lesson-48">48. MCP Tool Schema Introspection</a></li>
+    </ul>
+
+    <h4>Part III</h4>
+    <ul>
+      <li><a href="#part-3" class="toc-part-link">Memory &amp; Retrieval</a></li>
+      <li><a href="#lesson-14">14. Hybrid Search</a></li>
+      <li><a href="#lesson-21">21. Knowledge Graph Construction</a></li>
+      <li><a href="#lesson-28">28. Semantic Session Memory</a></li>
+      <li><a href="#lesson-34">34. Graph-Based Entity Memory</a></li>
+      <li><a href="#lesson-49">49. Cache Invalidation + RRF</a></li>
+      <li><a href="#lesson-51">51. Hybrid Graph-RAG</a></li>
+    </ul>
+
+    <h4>Part IV</h4>
+    <ul>
+      <li><a href="#part-4" class="toc-part-link">Multi-Agent Systems</a></li>
+      <li><a href="#lesson-9">9. Hand-Off &amp; Verification</a></li>
+      <li><a href="#lesson-15">15. Swarm Consensus Voting</a></li>
+      <li><a href="#lesson-18">18. Parallel Sub-Agents</a></li>
+      <li><a href="#lesson-36">36. State Synchronization</a></li>
+      <li><a href="#lesson-45">45. Tool-Call Arbitration</a></li>
+    </ul>
+
+    <h4>Part V</h4>
+    <ul>
+      <li><a href="#part-5" class="toc-part-link">Resilience &amp; Concurrency</a></li>
+      <li><a href="#lesson-8">8. Async Concurrency</a></li>
+      <li><a href="#lesson-27">27. Self-Healing Code</a></li>
+      <li><a href="#lesson-29">29. Token Bucket Rate Limiting</a></li>
+      <li><a href="#lesson-35">35. Deadlock Prevention</a></li>
+      <li><a href="#lesson-37">37. Model Cascades</a></li>
+      <li><a href="#lesson-46">46. Distributed Deadlock Detection</a></li>
+      <li><a href="#lesson-50">50. Tool Fallback Routing</a></li>
+    </ul>
+
+    <h4>Part VI</h4>
+    <ul>
+      <li><a href="#part-6" class="toc-part-link">Security &amp; Guardrails</a></li>
+      <li><a href="#lesson-13">13. Output Guardrails</a></li>
+      <li><a href="#lesson-20">20. AI Red Teaming</a></li>
+      <li><a href="#lesson-40">40. Autonomous Fuzzing</a></li>
+      <li><a href="#lesson-44">44. Semantic Tool Guardrails</a></li>
+      <li><a href="#lesson-52">52. Cryptographic Permission Scoping</a></li>
+      <li><a href="#lesson-54">54. Tenant Isolation</a></li>
+      <li><a href="#lesson-55">55. Deterministic Review Sampling</a></li>
+    </ul>
+
+    <h4>Part VII</h4>
+    <ul>
+      <li><a href="#part-7" class="toc-part-link">Observability &amp; Evaluation</a></li>
+      <li><a href="#lesson-7">7. OpenTelemetry Tracing</a></li>
+      <li><a href="#lesson-10">10. Evaluation-Driven Development</a></li>
+      <li><a href="#lesson-17">17. Distributed Tracing</a></li>
+      <li><a href="#lesson-19">19. LLM-as-a-Judge</a></li>
+      <li><a href="#lesson-25">25. CI/CD Eval Gates</a></li>
+      <li><a href="#lesson-26">26. Playwright E2E</a></li>
+      <li><a href="#lesson-30">30. Monorepo Orchestration</a></li>
+      <li><a href="#lesson-56">56. Baseline Promotion</a></li>
+      <li><a href="#lesson-57">57. Consecutive-Pass Promotion Window</a></li>
+      <li><a href="#lesson-58">58. Model Retry Guard</a></li>
+      <li><a href="#lesson-59">59. Stateful Evaluator Graph</a></li>
+      <li><a href="#lesson-60">60. Human-in-the-Loop Gate</a></li>
+      <li><a href="#lesson-61">61. Idempotent Approval Execution Ledger</a></li>
+      <li><a href="#lesson-62">62. Request-Scoped Degradation Visibility</a></li>
+      <li><a href="#lesson-63">63. Bounded Agent Loop Budget &amp; Step Authority</a></li>
+      <li><a href="#lesson-64">64. Jev-Style Decision Layer for Agent Routing</a></li>
+    </ul>
+
+    <h4>Part VIII</h4>
+    <ul>
+      <li><a href="#part-8" class="toc-part-link">Cost, Context &amp; Self-Correction</a></li>
+      <li><a href="#lesson-11">11. Multi-Model Router</a></li>
+      <li><a href="#lesson-16">16. Local Model Integration</a></li>
+      <li><a href="#lesson-22">22. Context Caching</a></li>
+      <li><a href="#lesson-31">31. Few-Shot Calibration</a></li>
+      <li><a href="#lesson-38">38. Multimodal Vision</a></li>
+      <li><a href="#lesson-41">41. Graph Schema Evolution</a></li>
+      <li><a href="#lesson-42">42. Self-Compaction</a></li>
+      <li><a href="#lesson-43">43. Self-Reflection &amp; Rollback</a></li>
+    </ul>
+
+    <h4>Part IX</h4>
+    <ul>
+      <li><a href="#part-9" class="toc-part-link">Shipping It</a></li>
+      <li><a href="#lesson-12">12. Human-in-the-Loop</a></li>
+      <li><a href="#lesson-24">24. Docker &amp; Compose</a></li>
+      <li><a href="#lesson-39">39. HITL Approval Checkpoints</a></li>
+      <li><a href="#lesson-47">47. Self-Healing Tool Correction</a></li>
+      <li><a href="#lesson-53">53. Resilient Streaming</a></li>
+    </ul>
+
+    <h4>Part X — Capstone</h4>
+    <ul>
+      <li><a href="#part-10" class="toc-part-link">Building Eunomia</a></li>
+    </ul>
+
+    <h4>Closing</h4>
+    <ul>
+      <li><a href="#closing">What 64 Lessons Taught Us</a></li>
+    </ul>
+  </nav>
+
+  <!-- ======================= MAIN CONTENT ======================= -->
+  <main>
+
+    <!-- ======= COVER ======= -->
+    <section class="cover" id="cover">
+      <img class="logo" src="icode-logo.svg" alt="icode.net logo">
+      <div class="kicker">icode.net presents</div>
+      <h1>Building Trustworthy AI Agents</h1>
+      <p class="subtitle">A field guide to 64 real, verified patterns for designing, securing, and shipping production AI agents — in Python and TypeScript, with every claim checked by actually running the code.</p>
+      <p class="subtitle-note">The end result of these lessons is a production-ready agent called <b>Eunomia</b>. We named it for the decision-first Jev pattern it applies: choose a typed route with explicit confidence before policy and tool execution, then escalate safely when confidence is low.</p>
+      <div class="meta-row">
+        <span class="pill">64 lessons</span>
+        <span class="pill"><b>2</b> languages, side by side</span>
+        <span class="pill">10 parts</span>
+        <span class="pill">1 capstone: <b>Eunomia</b></span>
+      </div>
+    </section>
+
+    <!-- ======= HOW TO READ THIS BOOK ======= -->
+    <section class="part" id="how-to-read" style="border-bottom: 1px solid var(--border);">
+      <div class="part-header">
+        <div class="part-eyebrow">Front Matter</div>
+        <h2>How to Read This Book</h2>
+        <p class="part-intro">Each lesson follows the same shape: a plain-English problem, the jargon you need (explained in parentheses the first time it appears), a dark-themed diagram, a short code example in both Python and TypeScript, one honest real-world finding (including the occasional real bug), and a direct tie-in to the capstone product, <b>Eunomia</b>. Parts I–IX build 64 individual patterns; Part X assembles them into one production-shaped architecture. Every code block has a Copy button for fast local experimentation.</p>
+        <div class="reader-note">
+          <p><b>How to read the examples in this part:</b> each lesson uses the same simple scenario so you can focus on one new idea at a time.</p>
+          <ul>
+            <li><b>Input:</b> a job-market query, for example "What is demand for LangGraph roles right now?"</li>
+            <li><b>Shared context:</b> a skill name extracted from that query, such as <code class="inline">langgraph</code></li>
+            <li><b>Goal:</b> produce a reliable output your code can use (a checked object, a real tool result, a routed branch, or an evidence-based answer)</li>
+          </ul>
+          <p>So when you see names like <code class="inline">evaluate_demand_node</code> or <code class="inline">route_by_priority</code>, they are steps in that same scenario: decide if the extracted skill is high demand, then route to the right next step.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Content injected below by section -->
+    
+
+    <!-- ======= FOOTER ======= -->
+    <div class="footer-page">
+      <img src="icode-logo.svg" alt="icode.net">
+      <p>Published by <a href="https://icode.net">icode.net</a> — practical AI engineering, built and verified in the open.</p>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  // Copy-to-clipboard for every code block. Works even if a part's HTML was
+  // authored with the plain `<pre class="code-block">` form (no wrapper) by
+  // wrapping it client-side, so no part file is a hard dependency of this.
+  document.addEventListener('DOMContentLoaded', () => {
+    const sidebarToggle = document.querySelector('.sidebar-toggle');
+    const isDesktop = () => window.matchMedia('(min-width: 901px)').matches;
+    const setSidebarCollapsed = (collapsed) => {
+      if (!isDesktop()) {
+        document.body.classList.remove('sidebar-collapsed');
+        if (sidebarToggle) {
+          sidebarToggle.setAttribute('aria-expanded', 'true');
+          sidebarToggle.setAttribute('aria-label', 'Collapse sidebar');
+          const label = sidebarToggle.querySelector('.toggle-label');
+          if (label) label.textContent = 'Collapse sidebar';
+        }
+        return;
+      }
+
+      document.body.classList.toggle('sidebar-collapsed', collapsed);
+      if (sidebarToggle) {
+        sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+        sidebarToggle.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+        const label = sidebarToggle.querySelector('.toggle-label');
+        if (label) label.textContent = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+      }
+    };
+
+    const storedSidebarState = localStorage.getItem('book-sidebar-collapsed') === '1';
+    setSidebarCollapsed(storedSidebarState);
+
+    sidebarToggle?.addEventListener('click', () => {
+      const collapsed = !document.body.classList.contains('sidebar-collapsed');
+      setSidebarCollapsed(collapsed);
+      if (isDesktop()) {
+        localStorage.setItem('book-sidebar-collapsed', collapsed ? '1' : '0');
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      setSidebarCollapsed(localStorage.getItem('book-sidebar-collapsed') === '1');
+    });
+
+    document.querySelectorAll('pre.code-block').forEach((pre) => {
+      let wrap = pre.closest('.code-wrap');
+      if (!wrap) {
+        wrap = document.createElement('div');
+        wrap.className = 'code-wrap';
+        pre.parentNode.insertBefore(wrap, pre);
+        wrap.appendChild(pre);
+      }
+      const lang = pre.dataset.lang || (pre.querySelector('code[class*="language-"]')?.className.match(/language-(\w+)/)?.[1]) || 'code';
+      if (!wrap.querySelector('.code-lang')) {
+        const tag = document.createElement('span');
+        tag.className = 'code-lang';
+        tag.textContent = lang;
+        wrap.appendChild(tag);
+      }
+      if (!wrap.querySelector('.copy-btn')) {
+        const btn = document.createElement('button');
+        btn.className = 'copy-btn';
+        btn.type = 'button';
+        btn.textContent = 'Copy';
+        btn.addEventListener('click', () => {
+          const text = pre.innerText;
+          navigator.clipboard.writeText(text).then(() => {
+            btn.textContent = 'Copied';
+            btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1600);
+          });
+        });
+        wrap.appendChild(btn);
+      }
+    });
+  });
+</script>
+</body>
+</html>

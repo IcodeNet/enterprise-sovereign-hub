@@ -1,0 +1,131 @@
+name: AI Evaluation Release Gate
+
+# Runs a small regression suite against a fixed benchmark dataset, in both
+# languages (its push/PR triggers are switched off for now; run it by hand).
+# If a prompt or model change drops
+# answer quality below the threshold, this blocks the merge instead of
+# letting a quiet regression ship.
+on:
+  # Temporarily manual-only to avoid model/eval spend on each commit.
+  # Re-enable push/pull_request triggers when budget constraints are lifted.
+  workflow_dispatch: {}
+
+jobs:
+  run-evals-python:
+    runs-on: ubuntu-latest
+    # Requires OPENAI_API_KEY as a repo secret (DeepEval's judge calls a
+    # real model). A fresh clone without the secret skips this job cleanly
+    # instead of failing - see AGENTS.md for the same pattern in ci.yml.
+    if: ${{ github.event.repository.fork == false }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: apps/ai-engine/requirements.txt
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/ai-engine/requirements.txt
+
+      - name: Run DeepEval Regression Suite
+        if: ${{ env.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cd apps/ai-engine
+          python -m pytest tests/test_ci_eval_gates.py -v
+
+      - name: Skip notice (no API key secret configured)
+        if: ${{ env.OPENAI_API_KEY == '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: echo "OPENAI_API_KEY secret not set - skipping Python regression gate."
+
+  run-evals-ts:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork == false }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install Dependencies
+        run: |
+          cd apps/web
+          npm install --legacy-peer-deps
+
+      # Hand-rolled instead of DeepEval's TS SDK: that beta package pulls in
+      # a transitive protobufjs dependency with a CRITICAL npm audit finding
+      # (see docs/Day 25... for the full evaluation and reasoning).
+      - name: Run TS Regression Gate
+        if: ${{ env.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cd apps/web
+          npm run ci-eval-gate
+
+      - name: Skip notice (no API key secret configured)
+        if: ${{ env.OPENAI_API_KEY == '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: echo "OPENAI_API_KEY secret not set - skipping TS regression gate."
+
+  e2e-playwright:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork == false }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install Dependencies
+        run: |
+          cd apps/web
+          npm install --legacy-peer-deps
+
+      - name: Install Playwright Browsers
+        run: |
+          cd apps/web
+          npx playwright install --with-deps chromium
+
+      - name: Build and Start Dev Server
+        if: ${{ env.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cd apps/web
+          npm run dev &
+          npx wait-on http://localhost:3001/chat --timeout 30000
+
+      - name: Run Playwright E2E Suite
+        if: ${{ env.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cd apps/web
+          npm run test:e2e
+
+      - name: Skip notice (no API key secret configured)
+        if: ${{ env.OPENAI_API_KEY == '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: echo "OPENAI_API_KEY secret not set - skipping Playwright E2E suite."

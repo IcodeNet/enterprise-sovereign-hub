@@ -1,0 +1,534 @@
+<!-- ======================================================= -->
+<!-- PART V — KEEPING AGENTS RUNNING -->
+<!-- ======================================================= -->
+<section class="part" id="part-5">
+  <div class="part-header">
+    <div class="part-eyebrow">Part V</div>
+    <h2>Keeping Agents Running (Resilience &amp; Concurrency)</h2>
+    <p class="part-intro">Building an agent that works once is only the beginning. A production agent must keep reaching a safe outcome—including refusal or handoff—when an upstream service slows down, a model becomes unavailable, generated code breaks, or two services wait on each other. These seven lessons build that resilience from controlled parallel work, through rate limits and circuit breakers, to deliberate fallbacks and distributed deadlock detection.</p>
+    <div class="reader-note">
+      <p><b>Dual-domain map for this part:</b> each resilience control applies to Eunomia (fintech) and Skill Reporter the same way.</p>
+      <ul>
+        <li><b>Eunomia domain:</b> bounded concurrent lookups, sandboxed repair loops, provider pacing, breaker protection, model fallback gates, deadlock detection, and timeout fallback routing.</li>
+        <li><b>Skill Reporter domain:</b> bounded report-data fan-out, sandboxed report-transform repair, provider pacing, breaker protection, model fallback gates, deadlock detection, and timeout fallback routing.</li>
+      </ul>
+      <p><b>Interlink chain:</b> Lesson <a href="#lesson-8">8</a> caps concurrent work, Lesson <a href="#lesson-29">29</a> caps outbound pace, Lesson <a href="#lesson-35">35</a> cuts failing dependencies, Lessons <a href="#lesson-50">50</a> and <a href="#lesson-56">56</a> route to safer alternatives, while Lessons <a href="#lesson-27">27</a> and <a href="#lesson-54">54</a> contain local execution and cross-agent stalls.</p>
+    </div>
+  </div>
+
+  <!-- LESSON 8 -->
+  <article class="lesson" id="lesson-8">
+    <span class="lesson-tag">Lesson 8</span>
+    <h3>Async Concurrency &amp; Batch Processing</h3>
+    <div class="problem"><b>The problem:</b> Eunomia often needs multiple independent checks before replying (balance, rates, goals, and recent transactions). Running those calls one by one makes the customer wait for avoidable latency. Skill Reporter has the same bottleneck when it gathers catalogue evidence, memory evidence, and policy evidence sequentially instead of in parallel.</div>
+
+    <p><span class="jargon">Async</span> (asynchronous code that can start a slow operation, do other work while it waits, and resume when the result arrives) lets independent calls overlap. That creates <span class="jargon">concurrency</span> (several tasks making progress during the same period by taking turns whenever another task is waiting), rather than strict one-by-one execution. Put the independent requests into a <span class="jargon">batch</span> (a group of requests launched together and collected as one set), then gather every outcome before composing the answer.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+from collections.abc import Awaitable, Callable
+
+async def run_batch(
+    items: list[str], fetch: Callable[[str], Awaitable[str]], limit: int = 3
+) -&gt; list[str | Exception]:
+    semaphore = asyncio.Semaphore(limit)
+
+    async def limited(item: str) -&gt; str:
+        async with semaphore:
+            return await fetch(item)
+
+    return await asyncio.gather(*(limited(item) for item in items), return_exceptions=True)</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type Result = { ok: true; value: string } | { ok: false; error: unknown };
+async function runBatch(
+  items: string[], fetchItem: (item: string) =&gt; Promise&lt;string&gt;, limit = 3
+): Promise&lt;Result[]&gt; {
+  const results: Result[] = new Array(items.length);
+  let next = 0;
+  async function worker(): Promise&lt;void&gt; {
+    while (next &lt; items.length) {
+      const index = next++;
+      try {
+        results[index] = { ok: true, value: await fetchItem(items[index]) };
+      } catch (error) {
+        results[index] = { ok: false, error };
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, () =&gt; worker()));
+  return results;
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 480">
+        <defs><marker id="ah8" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="24" y="150" width="170" height="72" rx="9" fill="rgba(30,41,59,0.6)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="109" y="176" fill="white" font-size="12" font-weight="600" text-anchor="middle">Eunomia request</text><text x="109" y="195" fill="#94a3b8" font-size="9" text-anchor="middle">“How are my</text><text x="109" y="209" fill="#94a3b8" font-size="9" text-anchor="middle">savings doing?”</text>
+        <line x1="194" y1="186" x2="242" y2="186" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah8)"/>
+        <rect x="244" y="150" width="140" height="72" rx="9" fill="rgba(8,51,68,0.45)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="314" y="181" fill="white" font-size="12" font-weight="600" text-anchor="middle">Batch dispatcher</text><text x="314" y="200" fill="#94a3b8" font-size="9" text-anchor="middle">launch under cap</text>
+        <line x1="384" y1="170" x2="445" y2="67" stroke="#94a3b8" marker-end="url(#ah8)"/><line x1="384" y1="180" x2="445" y2="137" stroke="#94a3b8" marker-end="url(#ah8)"/><line x1="384" y1="192" x2="445" y2="207" stroke="#94a3b8" marker-end="url(#ah8)"/><line x1="384" y1="204" x2="445" y2="277" stroke="#64748b" stroke-dasharray="4,4" opacity="0.45" marker-end="url(#ah8)"/>
+        <line x1="414" y1="38" x2="414" y2="305" stroke="#fbbf24" stroke-width="2"/><rect x="352" y="15" width="124" height="26" rx="13" fill="rgba(120,53,15,0.5)" stroke="#fbbf24"/><text x="414" y="32" fill="#fbbf24" font-size="9" text-anchor="middle">Semaphore: max 3</text>
+        <rect x="447" y="42" width="142" height="48" rx="8" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/><text x="518" y="71" fill="white" font-size="11" text-anchor="middle">Balance API</text>
+        <rect x="447" y="112" width="142" height="48" rx="8" fill="rgba(30,41,59,0.6)" stroke="#22d3ee"/><text x="518" y="141" fill="white" font-size="11" text-anchor="middle">Interest-rate API</text>
+        <rect x="447" y="182" width="142" height="48" rx="8" fill="rgba(30,41,59,0.6)" stroke="#a78bfa"/><text x="518" y="211" fill="white" font-size="11" text-anchor="middle">Goals service</text>
+        <rect x="447" y="252" width="142" height="48" rx="8" fill="rgba(30,41,59,0.35)" stroke="#64748b" opacity="0.55"/><text x="518" y="281" fill="#94a3b8" font-size="11" text-anchor="middle">Transactions API</text><text x="417" y="292" fill="#fbbf24" font-size="8" text-anchor="end">waiting</text>
+        <path d="M589 66 Q630 66 650 150" fill="none" stroke="#94a3b8" marker-end="url(#ah8)"/><path d="M589 136 Q625 136 650 168" fill="none" stroke="#94a3b8" marker-end="url(#ah8)"/><path d="M589 206 Q625 206 650 190" fill="none" stroke="#94a3b8" marker-end="url(#ah8)"/><path d="M589 276 Q635 276 650 210" fill="none" stroke="#fb7185" marker-end="url(#ah8)"/>
+        <rect x="652" y="135" width="140" height="100" rx="9" fill="rgba(30,41,59,0.6)" stroke="#fbbf24" stroke-width="1.5"/><text x="722" y="159" fill="white" font-size="11" font-weight="600" text-anchor="middle">Gather results</text><text x="722" y="174" fill="#94a3b8" font-size="9" text-anchor="middle">settle all</text>
+        <rect x="671" y="187" width="27" height="18" rx="4" fill="rgba(6,78,59,0.6)" stroke="#34d399"/><text x="684" y="200" fill="#34d399" font-size="7" text-anchor="middle">ok</text><rect x="702" y="187" width="27" height="18" rx="4" fill="rgba(6,78,59,0.6)" stroke="#34d399"/><text x="715" y="200" fill="#34d399" font-size="7" text-anchor="middle">ok</text><rect x="733" y="187" width="27" height="18" rx="4" fill="rgba(6,78,59,0.6)" stroke="#34d399"/><text x="746" y="200" fill="#34d399" font-size="7" text-anchor="middle">ok</text><rect x="702" y="209" width="38" height="18" rx="4" fill="rgba(136,19,55,0.45)" stroke="#fb7185"/><text x="721" y="222" fill="#fb7185" font-size="7" text-anchor="middle">failed</text>
+        <line x1="792" y1="185" x2="830" y2="185" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah8)"/><rect x="832" y="145" width="58" height="80" rx="8" fill="rgba(6,78,59,0.45)" stroke="#34d399"/><text x="861" y="174" fill="white" font-size="9" text-anchor="middle">Combined</text><text x="861" y="188" fill="white" font-size="9" text-anchor="middle">answer +</text><text x="861" y="202" fill="#34d399" font-size="8" text-anchor="middle">missing note</text>
+        <text x="32" y="362" fill="#94a3b8" font-size="10">Sequential: sum of calls</text><rect x="145" y="350" width="620" height="16" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185"/><text x="32" y="401" fill="#94a3b8" font-size="10">Capped: scheduled chains</text><rect x="145" y="389" width="270" height="16" rx="8" fill="rgba(6,78,59,0.5)" stroke="#34d399"/>
+      </svg>
+      <p class="diagram-caption">ONE REQUEST → CONTROLLED PARALLEL CALLS → SETTLE EVERY RESULT → COMBINE WHAT SUCCEEDED AND EXPLAIN WHAT DID NOT</p>
+    </div>
+
+    <p>Unbounded concurrency merely replaces waiting with overload. A <span class="jargon">semaphore</span> (a counter that permits only a fixed number of tasks to run at once) keeps a large batch from firing thousands of calls together. The useful result is not “everything succeeded”; it is a complete ledger of which calls succeeded and which failed, so the agent can still answer from the available facts.</p>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the default “wait for all” helper in either language rejects the entire batch when one call fails. The other calls may continue in the background, but their results are never collected. Use the “settle all” variant so every call becomes an explicit success or failure, and put a concurrency cap in place before launching a large batch.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s evidence planner runs the capability calls a question type needs with overlap, while a semaphore admits only three calls at once. Latency is therefore set by the longest call under that cap, rather than the sum of every call, and a missing source is recorded in the bundle so the answer sequence steps down instead of the whole turn failing, while a malformed source stops the turn safely before any model call. Skill Reporter uses the same capped fan-out to collect report evidence without saturating its dependencies.</div>
+  </article>
+
+  <!-- LESSON 27 -->
+  <article class="lesson" id="lesson-27">
+    <span class="lesson-tag">Lesson 27</span>
+    <h3>Self-Healing Code &amp; Auto-Repair Loops</h3>
+    <div class="problem"><b>The problem:</b> Eunomia can generate a savings-projection helper that looks correct but crashes on edge cases. Without an automatic repair loop, an operator must manually feed each crash back to the model. Skill Reporter faces the same operational drag when generated report-transformation code fails on real input variations.</div>
+
+    <p>A safe repair system runs generated code in a <span class="jargon">sandbox</span> (an isolated environment with no access to real files, networks or customer data, and with strict time and memory limits). If the run fails, it captures the <span class="jargon">stack trace</span> (the crash report showing which line failed and why) and starts a <span class="jargon">repair loop</span> (run, capture the error, ask for a correction, then run again up to a fixed attempt limit).</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>async def repair_until_valid(code: str, attempts: int = 3) -&gt; str:
+    last_error = ""
+    for attempt in range(attempts):
+        result = await run_in_sandbox(code, timeout_seconds=5)
+        if result.exit_code == 0 and acceptance_test(result.stdout):
+            return result.stdout
+
+        last_error = result.stderr or "acceptance test failed"
+        if attempt + 1 &lt; attempts:
+            code = await repair_model(code=code, error=last_error)
+
+    raise RuntimeError(f"repair failed: {last_error}")</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>async function repairUntilValid(code: string, attempts = 3): Promise&lt;string&gt; {
+  let lastError = "";
+  for (let attempt = 0; attempt &lt; attempts; attempt++) {
+    const result = await runInSandbox(code, { timeoutMs: 5_000 });
+    if (result.exitCode === 0 &amp;&amp; acceptanceTest(result.stdout)) {
+      return result.stdout;
+    }
+
+    lastError = result.stderr || "acceptance test failed";
+    if (attempt + 1 &lt; attempts) {
+      code = await repairModel({ code, error: lastError });
+    }
+  }
+
+  throw new Error(`repair failed: ${lastError}`);
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 390">
+        <defs><marker id="ah27" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/></marker></defs><rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="70" y="35" width="185" height="58" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/><text x="162" y="69" fill="white" font-size="12" font-weight="600" text-anchor="middle">Model: generate code</text>
+        <line x1="162" y1="93" x2="162" y2="131" stroke="#94a3b8" marker-end="url(#ah27)"/>
+        <rect x="40" y="133" width="350" height="142" rx="10" fill="rgba(30,41,59,0.35)" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="7,5"/><text x="215" y="158" fill="#22d3ee" font-size="11" font-weight="600" text-anchor="middle">Sandbox — no network · 5s · 256MB</text><rect x="88" y="178" width="254" height="65" rx="8" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/><text x="215" y="207" fill="white" font-size="12" text-anchor="middle">Run code + acceptance test</text><text x="215" y="226" fill="#94a3b8" font-size="9" text-anchor="middle">correct output, not merely no crash</text>
+        <path d="M390 204 L520 204" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah27)"/><text x="454" y="193" fill="#34d399" font-size="9" text-anchor="middle">passes</text><rect x="522" y="170" width="174" height="68" rx="8" fill="rgba(6,78,59,0.45)" stroke="#34d399" stroke-width="1.5"/><text x="609" y="210" fill="white" font-size="12" font-weight="600" text-anchor="middle">Return result</text>
+        <path d="M215 275 L215 310 L390 310" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah27)"/><text x="285" y="302" fill="#fb7185" font-size="9" text-anchor="middle">crash or wrong result</text><rect x="392" y="282" width="160" height="56" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185"/><text x="472" y="315" fill="white" font-size="11" text-anchor="middle">Capture stack trace</text>
+        <path d="M472 282 Q455 55 257 64" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#ah27)"/><text x="392" y="77" fill="#fbbf24" font-size="9" text-anchor="middle">code + error → “fix your mistake”</text><rect x="365" y="95" width="92" height="25" rx="12" fill="rgba(120,53,15,0.5)" stroke="#fbbf24"/><text x="411" y="112" fill="#fbbf24" font-size="9" text-anchor="middle">attempt 2 of 3</text>
+        <path d="M457 108 Q650 85 715 168" fill="none" stroke="#fb7185" marker-end="url(#ah27)"/><text x="616" y="104" fill="#fb7185" font-size="9" text-anchor="middle">attempts exhausted</text><rect x="715" y="170" width="160" height="68" rx="8" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/><text x="795" y="198" fill="white" font-size="11" text-anchor="middle">Give up safely</text><text x="795" y="217" fill="#94a3b8" font-size="9" text-anchor="middle">fallback answer</text>
+      </svg>
+      <p class="diagram-caption">GENERATE → RUN IN A LOCKED-DOWN SANDBOX → PROVE CORRECTNESS → REPAIR WITH THE ERROR, OR STOP AFTER A FIXED LIMIT</p>
+    </div>
+
+    <p>The decisive check is an <span class="jargon">acceptance test</span> (a test written before generation that defines the correct result). A <span class="jargon">process exit code</span> (the numeric status a program returns when it stops) can prove only that the program stopped without reporting an error; it cannot prove the answer is right. The loop must also terminate <span class="jargon">runaway child processes</span> (subprocesses that outlive or ignore the parent operation's limit) when its time limit expires, although Python and TypeScript require different process-control details to do that reliably.</p>
+
+    <blockquote>“Self-healing” does not mean unlimited retries or permission to run generated code on the host. It means a small, observable number of attempts inside a hostile-by-default sandbox, followed by a safe refusal.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a model may appear to repair a crash by wrapping the failing line in a catch-all that hides the error. The script then exits cleanly while returning the wrong answer. Count a repair as successful only when a real acceptance test passes, never merely because the crash disappeared. Also verify that the language-specific timeout path actually kills a runaway child process.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release generates no code and calculates no projections at runtime; Part X keeps this code-repair theme outside the serving path. If generated savings-projection code is added later, it is repaired and rerun only inside a sandbox, and if the acceptance test still fails when the attempt limit is reached, Eunomia says it cannot calculate the projection right now rather than presenting a plausible but wrong number. Skill Reporter applies the same sandboxed repair loop to generated report-transformation code.</div>
+  </article>
+
+  <!-- LESSON 29 -->
+  <article class="lesson" id="lesson-29">
+    <span class="lesson-tag">Lesson 29</span>
+    <h3>Token Bucket Rate Limiting</h3>
+    <div class="problem"><b>The problem:</b> concurrency makes Eunomia faster, but it can also burst model and upstream calls hard enough to hit provider limits during customer peaks. The result is avoidable 429 failures on valid requests. Skill Reporter sees the same quota spike risk during scheduled reporting windows unless outbound pace is controlled.</div>
+
+    <p>A <span class="jargon">rate limit</span> (the maximum number of requests, or amount of model text, accepted during a time window) is commonly enforced with <span class="jargon">HTTP 429</span> (the standard “Too Many Requests” response). Rather than waiting to be rejected, the agent can pace itself with a <span class="jargon">token bucket</span> (a container of request permits that has a fixed capacity, refills steadily, and makes a request wait when no permit is available). These permits are not the text tokens used to measure model input and output.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+from time import monotonic
+
+class TokenBucket:
+    def __init__(self, capacity: int, rate: float) -&gt; None:
+        if capacity &lt;= 0 or rate &lt;= 0:
+            raise ValueError("capacity and rate must be positive")
+        self.capacity, self.rate, self.tokens = capacity, rate, float(capacity)
+        self.updated = monotonic()
+        self.lock = asyncio.Lock()
+
+    async def acquire(self) -&gt; None:
+        while True:
+            async with self.lock:
+                now = monotonic()
+                self.tokens = min(self.capacity, self.tokens + (now - self.updated) * self.rate)
+                self.updated = now
+                if self.tokens &gt;= 1:
+                    self.tokens -= 1
+                    return
+                delay = (1 - self.tokens) / self.rate
+            await asyncio.sleep(delay)</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>class TokenBucket {
+  private tokens: number;
+  private updated = performance.now();
+  constructor(private capacity: number, private ratePerSecond: number) {
+    if (capacity &lt;= 0 || ratePerSecond &lt;= 0) {
+      throw new RangeError("capacity and rate must be positive");
+    }
+    this.tokens = capacity;
+  }
+  async acquire(): Promise&lt;void&gt; {
+    for (;;) {
+      const now = performance.now();
+      const elapsed = (now - this.updated) / 1_000;
+      this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.ratePerSecond);
+      this.updated = now;
+      if (this.tokens &gt;= 1) {
+        this.tokens -= 1;
+        return;
+      }
+      await new Promise((resolve) =&gt; setTimeout(resolve, ((1 - this.tokens) / this.ratePerSecond) * 1_000));
+    }
+  }
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 380">
+        <defs><marker id="ah29" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/></marker></defs><rect width="100%" height="100%" fill="#0a0f1f"/>
+        <text x="40" y="35" fill="#94a3b8" font-size="10">Incoming calls</text>
+        <g fill="rgba(30,41,59,0.6)" stroke="#94a3b8"><rect x="38" y="50" width="115" height="30" rx="6"/><rect x="38" y="88" width="115" height="30" rx="6"/><rect x="38" y="126" width="115" height="30" rx="6"/><rect x="38" y="164" width="115" height="30" rx="6"/><rect x="38" y="202" width="115" height="30" rx="6"/><rect x="38" y="240" width="115" height="30" rx="6"/></g><g fill="white" font-size="9" text-anchor="middle"><text x="95" y="69">Agent call 1</text><text x="95" y="107">Agent call 2</text><text x="95" y="145">Agent call 3</text><text x="95" y="183">Agent call 4</text><text x="95" y="221">Agent call 5</text><text x="95" y="259">Agent call 6</text></g>
+        <path d="M153 65 Q220 90 284 150 M153 103 Q225 115 284 160 M153 141 L284 170 M153 179 L284 180 M153 217 Q225 205 284 190 M153 255 Q220 225 284 200" fill="none" stroke="#94a3b8" marker-end="url(#ah29)"/>
+        <rect x="300" y="25" width="190" height="48" rx="8" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/><text x="395" y="45" fill="white" font-size="11" font-weight="600" text-anchor="middle">Refill tap</text><text x="395" y="61" fill="#22d3ee" font-size="9" text-anchor="middle">+1 token / 200ms</text><line x1="395" y1="73" x2="395" y2="107" stroke="#22d3ee" marker-end="url(#ah29)"/>
+        <path d="M285 112 L505 112 L485 265 Q480 290 455 290 L335 290 Q310 290 305 265 Z" fill="rgba(30,41,59,0.55)" stroke="#a78bfa" stroke-width="1.5"/><text x="395" y="137" fill="white" font-size="12" font-weight="600" text-anchor="middle">Token bucket</text><text x="395" y="153" fill="#94a3b8" font-size="9" text-anchor="middle">capacity 5</text>
+        <g fill="#34d399" stroke="#6ee7b7"><circle cx="345" cy="245" r="16"/><circle cx="382" cy="245" r="16"/><circle cx="419" cy="245" r="16"/><circle cx="456" cy="245" r="16"/></g><circle cx="395" cy="203" r="16" fill="none" stroke="#64748b" stroke-dasharray="3,3"/>
+        <line x1="505" y1="185" x2="605" y2="185" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah29)"/><text x="555" y="172" fill="#34d399" font-size="9" text-anchor="middle">token taken → send</text><rect x="607" y="145" width="150" height="80" rx="8" fill="rgba(6,78,59,0.45)" stroke="#34d399"/><text x="682" y="190" fill="white" font-size="12" font-weight="600" text-anchor="middle">Model provider</text>
+        <rect x="315" y="315" width="96" height="28" rx="6" fill="rgba(30,41,59,0.4)" stroke="#64748b"/><rect x="421" y="315" width="96" height="28" rx="6" fill="rgba(30,41,59,0.4)" stroke="#64748b"/><text x="416" y="363" fill="#94a3b8" font-size="9" text-anchor="middle">Waiting for a token</text>
+        <rect x="790" y="150" width="80" height="70" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185"/><text x="830" y="181" fill="#fb7185" font-size="12" font-weight="600" text-anchor="middle">HTTP 429</text><text x="830" y="202" fill="#94a3b8" font-size="8" text-anchor="middle">never reached</text><line x1="795" y1="215" x2="865" y2="155" stroke="#fb7185" stroke-width="3" stroke-dasharray="5,3"/>
+      </svg>
+      <p class="diagram-caption">REQUESTS TAKE PERMITS FROM A FINITE BUCKET → THE BUCKET REFILLS STEADILY → EXCESS CALLS WAIT LOCALLY INSTEAD OF REACHING HTTP 429</p>
+    </div>
+
+    <p>Refill calculations must use a <span class="jargon">monotonic clock</span> (a timer that only moves forward and is unaffected by corrections to the computer's calendar time). Capacity allows a small, intentional burst; refill speed controls the sustained rate. When no permit is available, these simple implementations make callers sleep and compete again; a separate first-in, first-out queue is needed when arrival-order fairness matters.</p>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a bucket refilled from <span class="jargon">wall-clock time</span> (calendar time that can jump when the system clock is corrected) can grant a flood of permits or stop refilling when that clock is corrected. Use a monotonic clock. Separately, a request-count bucket cannot enforce a provider's text-volume limit: a few very long prompts may still cause 429 responses, so model-text limits need their own <span class="jargon">weighted accounting</span> (charging each request in proportion to the text volume it consumes).</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> when many customers ask <b>Eunomia</b> questions at once, a bucket inside the model gateway keeps model calls beneath the provider's accepted pace. Customers may wait briefly inside Eunomia, but these snippets do not guarantee first-in, first-out service; add a real queue when that fairness is required. Skill Reporter uses the same token-bucket pacing to avoid upstream quota spikes during reporting cycles.</div>
+  </article>
+
+  <!-- LESSON 35 -->
+  <article class="lesson" id="lesson-35">
+    <span class="lesson-tag">Lesson 35</span>
+    <h3>Cross-Agent Deadlock Prevention &amp; Circuit Breakers</h3>
+    <div class="problem"><b>The problem:</b> when a dependency starts failing, Eunomia can keep calling it and waiting for timeouts, spreading slowdown across customer sessions. At the same time, cooperating agents can each wait for the other and deadlock. Skill Reporter has the same dual risk when report assembly depends on services that are failing or waiting on each other.</div>
+
+    <p>A <span class="jargon">cascading failure</span> (one broken service making its callers slow or broken until the damage spreads through the system) is contained by a <span class="jargon">circuit breaker</span> (a guard that counts failures and temporarily rejects new calls after a threshold). Its normal closed state passes calls through. Its open state fails immediately during a cool-down, and its <span class="jargon">half-open state</span> (a cautious recovery state that admits one test request) decides whether normal traffic is safe again.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from collections.abc import Awaitable, Callable
+from time import monotonic
+class CircuitBreaker:
+    def __init__(self, threshold: int = 5, cooldown: float = 10) -&gt; None:
+        self.threshold, self.cooldown = threshold, cooldown
+        self.failures, self.opened_at, self.probing = 0, 0.0, False
+    async def call(self, operation: Callable[[], Awaitable[str]]) -&gt; str:
+        now = monotonic()
+        if self.failures &gt;= self.threshold:
+            if now - self.opened_at &lt; self.cooldown or self.probing:
+                raise RuntimeError("circuit open")
+            self.probing = True
+        try:
+            value = await operation()
+        except Exception:
+            self.failures += 1
+            self.opened_at, self.probing = now, False
+            raise
+        self.failures, self.probing = 0, False
+        return value</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>class CircuitBreaker {
+  private failures = 0;
+  private openedAt = 0;
+  private probing = false;
+  async call(operation: () =&gt; Promise&lt;string&gt;): Promise&lt;string&gt; {
+    const now = performance.now();
+    if (this.failures &gt;= 5) {
+      if (now - this.openedAt &lt; 10_000 || this.probing) throw new Error("circuit open");
+      this.probing = true;
+    }
+    try {
+      const value = await operation();
+      this.failures = 0; this.probing = false;
+      return value;
+    } catch (error) {
+      this.failures += 1; this.openedAt = now; this.probing = false;
+      throw error;
+    }
+  }
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 490">
+        <defs><marker id="ah35" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/></marker><marker id="red35" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/></marker></defs><rect width="100%" height="100%" fill="#0a0f1f"/>
+        <text x="450" y="28" fill="#94a3b8" font-size="10" text-anchor="middle">CIRCUIT BREAKER STATE MACHINE</text>
+        <rect x="90" y="175" width="200" height="66" rx="9" fill="rgba(6,78,59,0.45)" stroke="#34d399" stroke-width="1.5"/><text x="190" y="204" fill="white" font-size="12" font-weight="600" text-anchor="middle">CLOSED</text><text x="190" y="222" fill="#34d399" font-size="9" text-anchor="middle">calls flow</text>
+        <rect x="350" y="45" width="200" height="66" rx="9" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/><text x="450" y="74" fill="white" font-size="12" font-weight="600" text-anchor="middle">OPEN</text><text x="450" y="92" fill="#fb7185" font-size="9" text-anchor="middle">fail fast</text>
+        <rect x="610" y="175" width="200" height="66" rx="9" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/><text x="710" y="204" fill="white" font-size="12" font-weight="600" text-anchor="middle">HALF-OPEN</text><text x="710" y="222" fill="#fbbf24" font-size="9" text-anchor="middle">one probe per process</text>
+        <path d="M270 175 Q330 100 398 111" fill="none" stroke="#fb7185" marker-end="url(#red35)"/><text x="314" y="120" fill="#fb7185" font-size="9" text-anchor="middle">5 consecutive failures</text><path d="M502 111 Q570 100 630 175" fill="none" stroke="#fbbf24" stroke-dasharray="6,4" marker-end="url(#ah35)"/><text x="585" y="119" fill="#fbbf24" font-size="9" text-anchor="middle">after 10s cool-down</text><path d="M610 224 Q445 290 290 224" fill="none" stroke="#34d399" marker-end="url(#ah35)"/><text x="450" y="278" fill="#34d399" font-size="9" text-anchor="middle">probe succeeds</text><path d="M710 175 Q680 55 552 78" fill="none" stroke="#fb7185" marker-end="url(#red35)"/><text x="655" y="70" fill="#fb7185" font-size="9" text-anchor="middle">probe fails</text>
+        <rect x="40" y="315" width="820" height="145" rx="10" fill="rgba(30,41,59,0.3)" stroke="#64748b"/><text x="70" y="340" fill="#94a3b8" font-size="10">DEADLOCK PREVENTION</text><rect x="135" y="365" width="180" height="58" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/><text x="225" y="399" fill="white" font-size="12" text-anchor="middle">Advice agent</text><rect x="585" y="365" width="180" height="58" rx="8" fill="rgba(76,29,149,0.35)" stroke="#a78bfa"/><text x="675" y="399" fill="white" font-size="12" text-anchor="middle">Risk agent</text><line x1="315" y1="382" x2="583" y2="382" stroke="#fb7185" stroke-width="1.5" marker-end="url(#red35)"/><line x1="585" y1="407" x2="317" y2="407" stroke="#fb7185" stroke-width="1.5" marker-end="url(#red35)"/><text x="450" y="374" fill="#fb7185" font-size="9" text-anchor="middle">waits for</text><text x="450" y="424" fill="#fb7185" font-size="9" text-anchor="middle">waits for</text><rect x="355" y="345" width="190" height="26" rx="13" fill="rgba(120,53,15,0.45)" stroke="#fbbf24"/><text x="450" y="362" fill="#fbbf24" font-size="9" text-anchor="middle">⏱ 3s → release, retry fixed order</text>
+      </svg>
+      <p class="diagram-caption">FAILURES TRIP THE BREAKER CLOSED → OPEN → ONE HALF-OPEN PROBE; TIMEOUTS AND FIXED ORDERING BREAK SIMPLE CROSS-AGENT WAITS</p>
+    </div>
+
+    <p>Circuit breakers contain calls to unhealthy dependencies; a <span class="jargon">deadlock</span> (two or more workers each waiting for something held by another, so none can continue) needs a different guard: bounded waits, release on timeout, and one <span class="jargon">fixed ordering</span> (a shared rule that every worker follows when acquiring several resources). These measures are deliberately simple. They prevent an indefinite hang even before the system gains the full distributed detector introduced in Lesson 46.</p>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a naive half-open implementation often allows every request arriving at the recovery moment through, even though it intends to allow “the next request.” That surge can knock the recovering service down again. The half-open probe must be protected so one request is <span class="jargon">in flight</span> (started but not yet completed) per process. A fleet-wide single probe requires a shared atomic store or distributed lease; production breakers also tag state generations so a late completion from an older generation cannot reset newer state.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s model gateway keeps a circuit breaker per provider: after repeated failures it stops calling that provider for a cool-down and moves to the next one in the chain, or the answer steps down a step, so customers do not wait through repeated timeouts. A store that keeps failing makes <code class="inline">/readyz</code> report the instance unready. The first release has no cooperating agents that could wait on each other, so this lesson's wait-graph half is not needed yet. Skill Reporter mirrors this breaker discipline for report and policy services.</div>
+  </article>
+
+  <!-- LESSON 37 -->
+  <article class="lesson" id="lesson-37">
+    <span class="lesson-tag">Lesson 37</span>
+    <h3>Autonomous Model Cascades &amp; Cost-Aware Escalation</h3>
+    <div class="problem"><b>The problem:</b> Eunomia cannot run every request on the most expensive model without unsustainable cost, but routing all requests to a cheap model degrades quality on regulated or high-risk questions. Skill Reporter has the same trade-off: routine summaries are cheap, but high-stakes publication checks need stronger reasoning.</div>
+
+    <p>A <span class="jargon">model cascade</span> (an ordered sequence of models from cheapest to most capable, tried until an answer passes) starts small and escalates only when necessary. After each attempt, a <span class="jargon">quality gate</span> (an automatic, programmatic check that decides whether an answer is acceptable) either returns the answer or triggers <span class="jargon">escalation</span> (sending the same task to the next, more capable model).</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from collections.abc import Awaitable, Callable
+
+Model = Callable[[str], Awaitable[dict[str, object]]]
+
+class RetryableModelError(Exception):
+    pass
+
+async def run_cascade(question: str, models: list[Model]) -&gt; dict[str, object]:
+    failures: list[str] = []
+    for model in models:
+        try:
+            answer = await model(question)
+        except RetryableModelError as error:
+            failures.append(type(error).__name__)
+            continue
+        if quality_gate(answer):
+            return answer
+    raise RuntimeError(f"no model produced an acceptable answer ({len(failures)} unavailable)")
+
+def quality_gate(answer: dict[str, object]) -&gt; bool:
+    citations = answer.get("citations")
+    return (
+        isinstance(answer.get("text"), str)
+        and isinstance(citations, list)
+        and all(isinstance(citation, str) for citation in citations)
+    )</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type Answer = { text: string; citations: string[] };
+type Model = (question: string) =&gt; Promise&lt;unknown&gt;;
+class RetryableModelError extends Error {}
+
+async function runCascade(question: string, models: Model[]): Promise&lt;Answer&gt; {
+  let unavailable = 0;
+  for (const model of models) {
+    try {
+      const answer = await model(question);
+      if (qualityGate(answer)) return answer;
+    } catch (error) {
+      if (!(error instanceof RetryableModelError)) throw error;
+      unavailable += 1;
+    }
+  }
+  throw new Error(`no model produced an acceptable answer (${unavailable} unavailable)`);
+}
+
+function qualityGate(value: unknown): value is Answer {
+  if (typeof value !== "object" || value === null) return false;
+  const answer = value as Partial&lt;Answer&gt;;
+  return (
+    typeof answer.text === "string" &amp;&amp;
+    Array.isArray(answer.citations) &amp;&amp;
+    answer.citations.every((citation) =&gt; typeof citation === "string")
+  );
+}</code></pre></div>
+
+    <p>Only failures that the model adapter classifies as retryable should advance the cascade. Cancellation, authentication errors, and policy failures must propagate instead of being swallowed; retryable failures should be recorded for observability.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 390">
+        <defs><marker id="ah37" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/></marker></defs><rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="80" width="135" height="58" rx="8" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/><text x="92" y="114" fill="white" font-size="11" font-weight="600" text-anchor="middle">Customer question</text><line x1="160" y1="109" x2="208" y2="109" stroke="#94a3b8" marker-end="url(#ah37)"/>
+        <rect x="210" y="70" width="165" height="78" rx="8" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/><text x="292" y="99" fill="white" font-size="11" font-weight="600" text-anchor="middle">Small model</text><text x="292" y="118" fill="#22d3ee" font-size="9" text-anchor="middle">cheap · fast</text><line x1="375" y1="109" x2="420" y2="109" stroke="#94a3b8" marker-end="url(#ah37)"/>
+        <polygon points="475,57 530,109 475,161 420,109" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/><text x="475" y="105" fill="white" font-size="10" font-weight="600" text-anchor="middle">Quality</text><text x="475" y="119" fill="white" font-size="10" font-weight="600" text-anchor="middle">gate</text>
+        <path d="M530 109 L715 109" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah37)"/><text x="620" y="96" fill="#34d399" font-size="9" text-anchor="middle">passes when gate accepts</text><rect x="717" y="75" width="155" height="68" rx="8" fill="rgba(6,78,59,0.45)" stroke="#34d399"/><text x="794" y="114" fill="white" font-size="12" font-weight="600" text-anchor="middle">Return answer</text>
+        <path d="M475 161 L475 202 L375 202" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#ah37)"/><text x="427" y="192" fill="#fbbf24" font-size="9" text-anchor="middle">escalate</text><rect x="210" y="174" width="165" height="70" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa"/><text x="292" y="203" fill="white" font-size="11" font-weight="600" text-anchor="middle">Large model</text><text x="292" y="222" fill="#a78bfa" font-size="9" text-anchor="middle">capable · costly</text><line x1="375" y1="209" x2="420" y2="209" stroke="#94a3b8" marker-end="url(#ah37)"/>
+        <polygon points="475,165 520,209 475,253 430,209" fill="rgba(120,53,15,0.4)" stroke="#fbbf24"/><text x="475" y="206" fill="white" font-size="9" text-anchor="middle">Quality</text><text x="475" y="219" fill="white" font-size="9" text-anchor="middle">gate</text><path d="M520 209 Q660 205 745 143" fill="none" stroke="#34d399" marker-end="url(#ah37)"/><path d="M475 253 L475 290 L650 290" fill="none" stroke="#fb7185" marker-end="url(#ah37)"/><rect x="652" y="255" width="220" height="70" rx="8" fill="rgba(30,41,59,0.55)" stroke="#94a3b8"/><text x="762" y="282" fill="white" font-size="10" font-weight="600" text-anchor="middle">Safe fallback</text><text x="762" y="301" fill="#94a3b8" font-size="9" text-anchor="middle">“Let me connect you to a specialist.”</text>
+        <rect x="25" y="300" width="330" height="48" rx="8" fill="rgba(30,41,59,0.45)" stroke="#a78bfa"/><text x="190" y="329" fill="#a78bfa" font-size="10" text-anchor="middle">Cost per answer = small + (large if escalated)</text>
+      </svg>
+      <p class="diagram-caption">TRY THE CHEAP MODEL → CHECK THE OUTPUT → RETURN AN ACCEPTABLE ANSWER OR ESCALATE HARD CASES → FALL BACK SAFELY IF NO ATTEMPT PASSES</p>
+    </div>
+
+    <p>The relevant measure is <span class="jargon">cost per answer</span> (the combined cost of every model attempted for one question, including rejected attempts). A cascade saves money only when the first model handles enough traffic and the gate is accurate enough to avoid needless escalation. Reliable gates inspect facts the program can verify, such as <span class="jargon">schema validity</span> (whether the output has the required fields and value types), required fields, and whether cited figures match source data. The snippets demonstrate shape checks only; source-backed factual checks are still required before treating an answer as verified.</p>
+
+    <blockquote>A model grading its own confidence is not an independent check. Confidence is generated text too, and a wrong answer can be delivered with complete certainty.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> asking the cheap model “are you confident?” makes a poor quality gate because models can report high confidence on wrong answers. Program-verifiable checks are much stronger. A gate that is too strict creates the opposite failure: almost every question reaches the large model, so the cascade costs more than sending each question directly there.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> turns this into a cascade of answer modes rather than model sizes. “What is my balance?” is answered by a template from the frozen snapshot with no model at all; questions that need wording go to the composed step; and if a composed draft fails the objective gate (the verifier), Eunomia hands the customer to a person. Inside the composed step, the gateway's ordered provider chain handles the choice between providers. Skill Reporter uses the same gated fallback policy for report-quality checks.</div>
+  </article>
+
+  <!-- LESSON 46 -->
+  <article class="lesson" id="lesson-46">
+    <span class="lesson-tag">Lesson 46</span>
+    <h3>Distributed Deadlock Detection &amp; Recovery</h3>
+    <div class="problem"><b>The problem:</b> timeouts can break circular waits in Eunomia, but only after wasting the full timeout budget and without proving whether the system was truly deadlocked or just slow. As Eunomia spans more services, no single worker sees the full wait chain. Skill Reporter inherits the same visibility gap once report generation, validation, and publishing are distributed.</div>
+
+    <p>A <span class="jargon">distributed system</span> (work spread across separate processes or machines that communicate over a network) needs a shared picture. Each worker reports waits to a <span class="jargon">wait-for graph</span> (a live map whose dots are agents and whose arrow from A to B means “A is waiting for B”). <span class="jargon">Cycle detection</span> (walking those arrows to find a path that returns to its starting point) can then identify a deadlock as soon as its final arrow appears.</p>
+
+    <p>The following snippets are single-process pseudocode for the cycle walk, limited to one active dependency per agent. A production distributed detector must apply edge updates atomically to a shared registry, support every simultaneous wait, attach an expiry to each edge, and remove edges on every exit path.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>waits_for: dict[str, str] = {}
+
+async def register_wait(agent: str, dependency: str) -&gt; None:
+    waits_for[agent] = dependency
+    seen: set[str] = set()
+    current = agent
+
+    while current in waits_for:
+        if current in seen:
+            victim = min(seen, key=retry_cost)
+            waits_for.pop(victim, None)
+            await cancel_victim(victim)
+            return
+        seen.add(current)
+        current = waits_for[current]
+
+async def stop_waiting(agent: str) -&gt; None:
+    waits_for.pop(agent, None)</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>const waitsFor = new Map&lt;string, string&gt;();
+async function registerWait(agent: string, dependency: string): Promise&lt;void&gt; {
+  waitsFor.set(agent, dependency);
+  const seen = new Set&lt;string&gt;();
+  let current: string | undefined = agent;
+  while (current !== undefined &amp;&amp; waitsFor.has(current)) {
+    if (seen.has(current)) {
+      const victim = [...seen].sort((a, b) =&gt; retryCost(a) - retryCost(b))[0];
+      waitsFor.delete(victim);
+      await cancelVictim(victim);
+      return;
+    }
+    seen.add(current);
+    current = waitsFor.get(current);
+  }
+}
+
+function stopWaiting(agent: string): void {
+  waitsFor.delete(agent);
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 500">
+        <defs><marker id="ah46" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/></marker><marker id="red46" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/></marker></defs><rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="330" y="150" width="240" height="190" rx="10" fill="rgba(30,41,59,0.55)" stroke="#a78bfa" stroke-width="1.5"/><text x="450" y="178" fill="white" font-size="12" font-weight="600" text-anchor="middle">Wait-for registry</text><text x="450" y="195" fill="#94a3b8" font-size="9" text-anchor="middle">live entries with expiry times</text>
+        <circle cx="385" cy="230" r="22" fill="rgba(8,51,68,0.5)" stroke="#22d3ee"/><circle cx="465" cy="222" r="22" fill="rgba(8,51,68,0.5)" stroke="#22d3ee"/><circle cx="515" cy="285" r="22" fill="rgba(8,51,68,0.5)" stroke="#22d3ee"/><circle cx="405" cy="290" r="22" fill="rgba(8,51,68,0.5)" stroke="#22d3ee"/><text x="385" y="234" fill="white" font-size="8" text-anchor="middle">Planner</text><text x="465" y="226" fill="white" font-size="8" text-anchor="middle">Advice</text><text x="515" y="289" fill="white" font-size="8" text-anchor="middle">Risk</text><text x="405" y="287" fill="white" font-size="7" text-anchor="middle">Compliance</text>
+        <line x1="407" y1="228" x2="441" y2="224" stroke="#94a3b8" marker-end="url(#ah46)"/><line x1="480" y1="239" x2="502" y2="265" stroke="#fb7185" stroke-width="2" marker-end="url(#red46)"/><line x1="493" y1="292" x2="429" y2="292" stroke="#fb7185" stroke-width="2" marker-end="url(#red46)"/><line x1="415" y1="270" x2="449" y2="238" stroke="#fb7185" stroke-width="2" marker-end="url(#red46)"/><text x="478" y="320" fill="#fb7185" font-size="9" text-anchor="middle">cycle found</text>
+        <rect x="45" y="50" width="150" height="58" rx="8" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/><text x="120" y="84" fill="white" font-size="11" text-anchor="middle">Planner</text><rect x="705" y="50" width="150" height="58" rx="8" fill="rgba(30,41,59,0.6)" stroke="#22d3ee"/><text x="780" y="84" fill="white" font-size="11" text-anchor="middle">Advice agent</text><rect x="705" y="392" width="150" height="58" rx="8" fill="rgba(30,41,59,0.6)" stroke="#a78bfa"/><text x="780" y="426" fill="white" font-size="11" text-anchor="middle">Risk agent</text><rect x="45" y="392" width="150" height="58" rx="8" fill="rgba(136,19,55,0.3)" stroke="#fb7185"/><text x="120" y="418" fill="white" font-size="11" text-anchor="middle">Compliance agent</text><text x="178" y="405" fill="#fb7185" font-size="20">×</text>
+        <path d="M195 92 Q300 110 350 163 M705 92 Q600 110 550 163 M705 410 Q610 365 550 330 M195 410 Q290 365 350 330" fill="none" stroke="#64748b" stroke-width="1" marker-end="url(#ah46)"/><text x="275" y="105" fill="#94a3b8" font-size="8">report: I’m waiting on X</text><text x="625" y="105" fill="#94a3b8" font-size="8" text-anchor="end">report: I’m waiting on X</text>
+        <line x1="570" y1="245" x2="640" y2="245" stroke="#fb7185" stroke-width="1.5" marker-end="url(#red46)"/><rect x="642" y="205" width="210" height="80" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185"/><text x="747" y="234" fill="white" font-size="11" font-weight="600" text-anchor="middle">Cycle detector</text><text x="747" y="253" fill="#94a3b8" font-size="9" text-anchor="middle">cycle walk · on each edge update</text><path d="M680 285 Q500 450 195 421" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#ah46)"/><text x="445" y="439" fill="#fbbf24" font-size="9" text-anchor="middle">victim: cancel + retry</text>
+        <path d="M120 50 Q120 20 250 20" fill="none" stroke="#34d399" marker-end="url(#ah46)"/><rect x="252" y="5" width="190" height="42" rx="8" fill="rgba(6,78,59,0.45)" stroke="#34d399"/><text x="347" y="31" fill="white" font-size="10" text-anchor="middle">Safe answer delivered</text>
+      </svg>
+      <p class="diagram-caption">EACH AGENT REPORTS ITS ACTIVE WAIT → THE REGISTRY FINDS A CYCLE → ONE DELIBERATE VICTIM IS CANCELLED → THE REMAINING WORK CAN COMPLETE</p>
+    </div>
+
+    <p>Once a loop is found, <span class="jargon">victim selection</span> (choosing which participant to cancel or restart so the rest can proceed) should consider retry cost and fairness. Always cancelling the same role can cause <span class="jargon">starvation</span> (a worker being denied enough uninterrupted time to ever finish). Every registered edge also needs an expiry and must be removed on success, failure, cancellation, and timeout.</p>
+
+    <div class="finding"><b>A real finding worth knowing:</b> stale arrows create false deadlock alarms. An agent can finish or crash without removing its “I am waiting on X” entry, leaving a cycle that exists only in the registry. Give every entry an expiry time and run “stop waiting” on every exit path, including errors. Rotate or score victims as well; always choosing the same kind of agent can starve it indefinitely.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release has no cooperating checks that can wait on each other, so distributed deadlock detection is not needed on its serving path; a per-turn budget and the one-ending-event rule already stop a turn from hanging. If separate checking services are added later, an event-driven detector can see the loop when the shared registry atomically accepts the closing edge, remove and cancel one selected side, and retry safely. Skill Reporter applies the same detector when report-synthesis and policy-validation branches create circular waits.</div>
+  </article>
+
+  <!-- LESSON 50 -->
+  <article class="lesson" id="lesson-50">
+    <span class="lesson-tag">Lesson 50</span>
+    <h3>Dynamic Agent Tool Fallback &amp; Secondary Routing</h3>
+    <div class="problem"><b>The problem:</b> Eunomia' primary data source can remain technically up while becoming too slow for a customer conversation. Waiting indefinitely for perfect freshness often harms trust more than a timely, clearly-labelled fallback. Skill Reporter faces the same decision when primary reporting data is slow during publication deadlines.</div>
+
+    <p><span class="jargon">Latency</span> (the time from sending a request to receiving its response) can be controlled with a <span class="jargon">routing deadline</span> (an internal maximum wait before fallback begins). When the primary reaches that deadline, <span class="jargon">secondary routing</span> (sending the work to a backup provider) chooses a faster source with known trade-offs, such as cached rather than live data. This 800-millisecond routing threshold is not itself a customer-facing service-level agreement.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+from collections.abc import Awaitable, Callable
+
+async def route_with_fallback(
+    primary: Callable[[], Awaitable[str]], secondary: Callable[[], Awaitable[str]]
+) -&gt; str:
+    task = asyncio.create_task(primary())
+    done, _ = await asyncio.wait({task}, timeout=0.8)
+    if done:
+        return task.result()
+
+    task.cancel()
+
+    def observe_completion(finished: asyncio.Task[str]) -&gt; None:
+        if not finished.cancelled():
+            finished.exception()
+
+    task.add_done_callback(observe_completion)
+    return await secondary()</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>async function routeWithFallback(): Promise&lt;string&gt; {
+  const controller = new AbortController();
+  const primary = primaryProvider({ signal: controller.signal });
+  let timedOut = false;
+  let timeout: ReturnType&lt;typeof setTimeout&gt; | undefined;
+  const deadline = new Promise&lt;never&gt;((_, reject) =&gt; {
+    timeout = setTimeout(() =&gt; {
+      timedOut = true;
+      controller.abort();
+      reject(new Error("primary deadline exceeded"));
+    }, 800);
+  });
+
+  try {
+    return await Promise.race([primary, deadline]);
+  } catch (error) {
+    if (!timedOut) throw error;
+    void primary.catch(() =&gt; undefined);
+    return await secondaryProvider();
+  } finally {
+    clearTimeout(timeout);
+  }
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 390">
+        <defs><marker id="ah50" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/></marker><marker id="red50" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/></marker></defs><rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="145" width="180" height="70" rx="8" fill="rgba(30,41,59,0.6)" stroke="#a78bfa"/><text x="115" y="173" fill="white" font-size="11" font-weight="600" text-anchor="middle">Eunomia tool call</text><text x="115" y="193" fill="#94a3b8" font-size="9" text-anchor="middle">get savings rates</text><line x1="205" y1="180" x2="258" y2="180" stroke="#94a3b8" marker-end="url(#ah50)"/>
+        <rect x="260" y="140" width="170" height="80" rx="8" fill="rgba(8,51,68,0.45)" stroke="#22d3ee" stroke-width="1.5"/><text x="345" y="171" fill="white" font-size="12" font-weight="600" text-anchor="middle">Router</text><text x="345" y="192" fill="#22d3ee" font-size="9" text-anchor="middle">fallback trigger: 800ms</text>
+        <path d="M345 140 Q400 70 495 72" fill="none" stroke="#94a3b8" marker-end="url(#ah50)"/><rect x="497" y="40" width="210" height="70" rx="8" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/><text x="602" y="66" fill="white" font-size="11" font-weight="600" text-anchor="middle">Primary provider</text><text x="602" y="84" fill="#94a3b8" font-size="9" text-anchor="middle">fresh · detailed</text><text x="602" y="101" fill="#fb7185" font-size="9" text-anchor="middle">⏱ 1,900ms</text><path d="M497 92 Q420 100 390 142" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#red50)"/><text x="436" y="92" fill="#fb7185" font-size="8" text-anchor="middle">deadline → cancel requested</text>
+        <path d="M345 220 Q400 292 495 290" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#ah50)"/><text x="418" y="275" fill="#fbbf24" font-size="8" text-anchor="middle">fallback after 800ms</text><rect x="497" y="257" width="210" height="70" rx="8" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/><text x="602" y="284" fill="white" font-size="11" font-weight="600" text-anchor="middle">Secondary provider</text><text x="602" y="302" fill="#94a3b8" font-size="9" text-anchor="middle">cached · faster</text><path d="M497 309 Q410 310 388 220" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah50)"/><text x="428" y="329" fill="#34d399" font-size="8" text-anchor="middle">returned in 120ms</text>
+        <line x1="430" y1="180" x2="735" y2="180" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah50)"/><rect x="737" y="137" width="145" height="86" rx="8" fill="rgba(6,78,59,0.45)" stroke="#34d399"/><text x="809" y="166" fill="white" font-size="11" font-weight="600" text-anchor="middle">Answer</text><text x="809" y="185" fill="#34d399" font-size="9" text-anchor="middle">rates as of 09:00</text><text x="809" y="202" fill="#94a3b8" font-size="8" text-anchor="middle">freshness note</text>
+        <rect x="240" y="330" width="330" height="40" rx="8" fill="rgba(30,41,59,0.45)" stroke="#fb7185"/><text x="405" y="355" fill="#94a3b8" font-size="9" text-anchor="middle">Log primary breach → feed circuit breaker (Lesson 35)</text>
+      </svg>
+      <p class="diagram-caption">START THE PRIMARY WITH A DEADLINE → TRIGGER FALLBACK AND REQUEST CANCELLATION AT THE DEADLINE → LABEL THE SECONDARY ANSWER'S FRESHNESS</p>
+    </div>
+
+    <p>The abandoned operation also needs <span class="jargon">cancellation</span> (actively signalling slow work to stop so it releases connections, processing time, and cost). Racing a request against a timer changes which result the router uses; it does not necessarily stop the loser, so the abandoned promise or task must still be observed. Each primary breach should be logged and fed into the circuit breaker from Lesson 35, so repeated slowness eventually prevents wasteful primary attempts altogether. The secondary needs its own deadline and a refusal or handoff path; fallback is not permission to wait forever on a second dependency.</p>
+
+    <div class="finding"><b>A real finding worth knowing:</b> racing a slow request against a timer can trigger fallback at 800 milliseconds, but cancellation remains cooperative unless the client or transport enforces a hard timeout. A primary that ignores the signal may continue consuming connections and cost in the background. Observe its eventual completion, and use transport-level timeouts when the operation itself must stop at a wall-clock bound.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> this lesson's fallback routing lives inside <b>Eunomia</b>'s model gateway: when one provider misses its timeout, the gateway cancels the call and tries the next provider in the chain within the per-turn budget, and if the whole chain misses, the answer steps down to a person rather than leaving the chat waiting. Store data is not served from a stale cache in the first release; the snapshot's as-of time and the catalogue version in the evidence bundle say how fresh each fact is. Skill Reporter applies the same timeout-fallback chain and freshness disclosure on delayed report-data providers.</div>
+  </article>
+
+  <blockquote>These protections reinforce one another: concurrency creates the bursts rate limiting controls; circuit breakers and secondary routing stop waits on unhealthy dependencies; graph-based detection improves on deadlock timeouts; and both repair loops and model cascades retry only until an objective check passes, then fall back safely. Together they help Eunomia respond safely when something upstream fails—including by refusing or handing off when no validated fallback exists.</blockquote>
+</section>

@@ -1,0 +1,774 @@
+<section class="part" id="part-3">
+  <div class="part-header">
+    <div class="part-eyebrow">Part III</div>
+    <h2>Memory &amp; Retrieval</h2>
+    <p class="part-intro">An AI agent is only as trustworthy as the information it can find and remember. This part moves from finding documents, through remembering conversations and connected facts, to keeping retrieval (finding relevant stored information for a question) correct when source material changes. Across all six lessons, Eunomia learns to search product and FAQ documents, retain what a customer has said, and support every factual claim about an account or product with current retrieved evidence rather than the model's memory.</p>
+    <p class="part-intro">The reading path is deliberate: Lessons <a href="#lesson-14">14</a> and <a href="#lesson-21">21</a> find information, Lessons <a href="#lesson-28">28</a> and <a href="#lesson-34">34</a> remember it, and Lessons <a href="#lesson-49">49</a> and <a href="#lesson-51">51</a> keep changing information correct and join search results to source-linked facts.</p>
+    <div class="reader-note">
+      <p><b>Dual-domain map for this part:</b> every mechanism shown for Eunomia (fintech) is meant to transfer to Skill Reporter.</p>
+      <ul>
+        <li><b>Fintech domain:</b> product/FAQ retrieval, customer-memory recall, entity disambiguation, and rate-change index updates.</li>
+        <li><b>Skill Reporter domain:</b> skill-catalogue retrieval, report-memory recall, skill/entity disambiguation, and skill-definition index updates.</li>
+      </ul>
+      <p><b>Interlink chain:</b> Lesson <a href="#lesson-14">14</a> hybrid retrieval + Lesson <a href="#lesson-21">21</a> graph facts, then Lesson <a href="#lesson-28">28</a> semantic memory + Lesson <a href="#lesson-34">34</a> entity memory, then Lesson <a href="#lesson-49">49</a> live index correctness, ending in Lesson <a href="#lesson-51">51</a> cross-representation agreement.</p>
+    </div>
+  </div>
+
+  <!-- LESSON 14 -->
+  <article class="lesson" id="lesson-14">
+    <span class="lesson-tag">Lesson 14</span>
+    <h3>Hybrid Search: Dense + Sparse Retrieval</h3>
+    <div class="problem"><b>The problem:</b> meaning-only search can answer “what's the rate on the 95-day notice account?” with a different notice product that merely sounds similar. Exact-word search has the opposite weakness: it can miss “how long do I have to wait to get my money out?” because the customer never used the formal words “notice period.” A dependable fintech retrieval layer must understand both meaning and exact product language. Skill Reporter has the same requirement when users ask in plain language but the catalogue stores formal skill names and versioned tags.</div>
+
+    <p><span class="jargon">Dense retrieval</span> (search by meaning, where each passage becomes a long list of numbers and passages with similar meanings sit close together) handles everyday descriptions. That list is an <span class="jargon">embedding</span> (a numeric fingerprint of what a piece of text means, produced by a model). Dense retrieval can connect “wait to get my money out” with a passage about a withdrawal notice period even when the words differ.</p>
+
+    <p><span class="jargon">Sparse retrieval</span> (classic keyword search that scores exact query words, with rare words receiving more weight), commonly implemented with <span class="jargon">BM25</span> (the standard formula for that keyword score), protects exact identifiers such as “95-day.” The dense branch searches a vector index (a store organised by meaning fingerprints); the sparse branch uses a tokenizer (a component that splits text into searchable terms). Each returns its top K (the highest-ranked K results). The two searches then need <span class="jargon">score fusion</span> (combining two result lists into one final ranking).</p>
+
+    <p>The introductory baseline below divides each branch by its highest score before applying a weight. This <span class="jargon">max-score normalisation</span> (scaling one result list by its largest observed score) makes the scales comparable for a small example, but it is sensitive to which candidates happen to be present and gives a one-result branch its full weight. Lesson <a href="#lesson-49">49</a> replaces it with rank-based RRF for the production design, and Lesson <a href="#lesson-51">51</a> consumes that fused retrieval output in its grounding check.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from collections import defaultdict
+from typing import TypeAlias
+
+Ranked: TypeAlias = list[tuple[str, float]]
+
+def fuse_scores(dense: Ranked, sparse: Ranked) -&gt; Ranked:
+    fused: defaultdict[str, float] = defaultdict(float)
+    for results, weight in ((dense, 0.6), (sparse, 0.4)):
+        if not results:
+            continue
+        peak = max(score for _, score in results)
+        if peak &lt;= 0:
+            raise ValueError("branch scores must include a positive value")
+        for document_id, score in results:
+            fused[document_id] += weight * score / peak
+    return sorted(fused.items(), key=lambda item: item[1], reverse=True)
+
+print(fuse_scores([("notice", 0.82)], [("notice", 12.4), ("fixed", 9.1)]))</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type ScoredResult = { documentId: string; score: number };
+
+function fuseScores(
+  dense: ScoredResult[],
+  sparse: ScoredResult[],
+): ScoredResult[] {
+  const fused = new Map&lt;string, number&gt;();
+  for (const [results, weight] of [[dense, 0.6], [sparse, 0.4]] as const) {
+    if (results.length === 0) continue;
+    const peak = Math.max(...results.map(({ score }) =&gt; score));
+    if (peak &lt;= 0) throw new Error("branch scores must include a positive value");
+    for (const { documentId, score } of results) {
+      fused.set(documentId, (fused.get(documentId) ?? 0) + weight * score / peak);
+    }
+  }
+  return [...fused].map(([documentId, score]) =&gt; ({ documentId, score }))
+    .sort((a, b) =&gt; b.score - a.score);
+}
+
+console.log(fuseScores([{ documentId: "notice", score: 0.82 }],
+  [{ documentId: "notice", score: 12.4 }, { documentId: "fixed", score: 9.1 }]));</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 430">
+        <defs><marker id="ah14" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="175" width="145" height="72" rx="10" fill="rgba(30,41,59,0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="97" y="202" fill="white" font-size="12" font-weight="600" text-anchor="middle">Customer query</text>
+        <text x="97" y="222" fill="#94a3b8" font-size="10" text-anchor="middle">“95-day notice rate?”</text>
+        <path d="M170 211 L205 211 L205 100 L235 100" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah14)"/>
+        <path d="M170 211 L205 211 L205 320 L235 320" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah14)"/>
+
+        <rect x="238" y="65" width="140" height="70" rx="8" fill="rgba(8,51,68,0.45)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="308" y="96" fill="white" font-size="12" font-weight="600" text-anchor="middle">Embedding model</text>
+        <text x="308" y="114" fill="#67e8f9" font-size="9" text-anchor="middle">query → meaning vector</text>
+        <line x1="378" y1="100" x2="418" y2="100" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah14)"/>
+        <ellipse cx="493" cy="75" rx="73" ry="15" fill="rgba(8,51,68,0.6)" stroke="#22d3ee"/>
+        <rect x="420" y="75" width="146" height="55" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/>
+        <ellipse cx="493" cy="130" rx="73" ry="15" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/>
+        <text x="493" y="101" fill="white" font-size="11" text-anchor="middle">Vector index</text>
+        <text x="493" y="116" fill="#67e8f9" font-size="9" text-anchor="middle">dense</text>
+        <line x1="566" y1="102" x2="606" y2="102" stroke="#22d3ee" marker-end="url(#ah14)"/>
+        <rect x="608" y="45" width="175" height="112" rx="8" fill="rgba(30,41,59,0.55)" stroke="#22d3ee"/>
+        <text x="695" y="68" fill="white" font-size="11" font-weight="600" text-anchor="middle">Top-K by meaning</text>
+        <text x="625" y="91" fill="#94a3b8" font-size="10">Notice accounts</text><text x="760" y="91" fill="#22d3ee" font-size="10" text-anchor="end">0.82</text>
+        <text x="625" y="113" fill="#94a3b8" font-size="10">Withdrawal wait</text><text x="760" y="113" fill="#22d3ee" font-size="10" text-anchor="end">0.79</text>
+        <text x="625" y="135" fill="#94a3b8" font-size="10">95-day terms</text><text x="760" y="135" fill="#22d3ee" font-size="10" text-anchor="end">0.77</text>
+
+        <rect x="238" y="285" width="140" height="70" rx="8" fill="rgba(120,53,15,0.35)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="308" y="316" fill="white" font-size="12" font-weight="600" text-anchor="middle">Tokenizer</text>
+        <text x="308" y="334" fill="#fde68a" font-size="9" text-anchor="middle">query → exact words</text>
+        <line x1="378" y1="320" x2="418" y2="320" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah14)"/>
+        <ellipse cx="493" cy="295" rx="73" ry="15" fill="rgba(120,53,15,0.5)" stroke="#fbbf24"/>
+        <rect x="420" y="295" width="146" height="55" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/>
+        <ellipse cx="493" cy="350" rx="73" ry="15" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/>
+        <text x="493" y="321" fill="white" font-size="11" text-anchor="middle">Keyword index</text>
+        <text x="493" y="336" fill="#fde68a" font-size="9" text-anchor="middle">BM25 / sparse</text>
+        <line x1="566" y1="322" x2="606" y2="322" stroke="#fbbf24" marker-end="url(#ah14)"/>
+        <rect x="608" y="265" width="175" height="112" rx="8" fill="rgba(30,41,59,0.55)" stroke="#fbbf24"/>
+        <text x="695" y="288" fill="white" font-size="11" font-weight="600" text-anchor="middle">Top-K by keyword</text>
+        <text x="625" y="311" fill="#94a3b8" font-size="10">95-day rate</text><text x="760" y="311" fill="#fbbf24" font-size="10" text-anchor="end">12.4</text>
+        <text x="625" y="333" fill="#94a3b8" font-size="10">Notice product</text><text x="760" y="333" fill="#fbbf24" font-size="10" text-anchor="end">9.1</text>
+        <text x="625" y="355" fill="#94a3b8" font-size="10">Rates table</text><text x="760" y="355" fill="#fbbf24" font-size="10" text-anchor="end">3.0</text>
+
+        <path d="M783 102 Q825 102 850 185" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah14)"/>
+        <path d="M783 322 Q825 322 850 237" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah14)"/>
+        <polygon points="850,170 900,211 850,252 800,211" fill="rgba(76,29,149,0.5)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="850" y="207" fill="white" font-size="11" font-weight="600" text-anchor="middle">Fuse</text>
+        <text x="850" y="222" fill="white" font-size="11" font-weight="600" text-anchor="middle">results</text>
+        <rect x="790" y="280" width="150" height="52" rx="6" fill="rgba(136,19,55,0.35)" stroke="#fb7185"/>
+        <text x="865" y="301" fill="#fb7185" font-size="9" text-anchor="middle">Different score scales:</text>
+        <text x="865" y="316" fill="#fb7185" font-size="9" text-anchor="middle">do not just add them</text>
+        <line x1="900" y1="211" x2="953" y2="211" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah14)"/>
+        <rect x="955" y="174" width="125" height="74" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="1017" y="204" fill="white" font-size="11" font-weight="600" text-anchor="middle">Final ranked</text>
+        <text x="1017" y="222" fill="white" font-size="11" font-weight="600" text-anchor="middle">passages</text>
+      </svg>
+      <p class="diagram-caption">ONE QUERY TAKES A MEANING PATH AND AN EXACT-WORD PATH → THE TWO RANKINGS ARE FUSED → ONE BALANCED RESULT LIST</p>
+    </div>
+
+    <blockquote>Raw scores cannot be compared safely. Dense similarity commonly sits between 0 and 1, while a BM25 score can be 5, 20, or more. Adding them directly lets keyword search quietly drown out meaning search.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the TypeScript exercise required a real Qdrant server and did not have Python's built-in fusion retriever. In the verified run, both implementations still surfaced the same two target documents. That result supports the retrieval design for the tested data; it does not guarantee identical rankings across tokenizers or corpora.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s guidance store can run hybrid search over its approved guidance passages behind <code class="inline">lookupGuidance</code>, so a customer reaches the right passage whether they quote a precise product or term name or describe their need in everyday language; product figures themselves come from the catalogue's structured filter. Skill Reporter uses the same hybrid pattern over its skill catalogue so a reporter can find the right skill whether they use exact names or plain-language descriptions.</div>
+  </article>
+
+  <!-- LESSON 21 -->
+  <article class="lesson" id="lesson-21">
+    <span class="lesson-tag">Lesson 21</span>
+    <h3>Knowledge Graph Construction</h3>
+    <div class="problem"><b>The problem:</b> similarity search can find a passage that sounds relevant, but it cannot reliably answer “which accounts held at this bank pay monthly interest?” That question asks how products, banks, rates, and payment schedules are connected. Those connections must be extracted and stored in a directly queryable form. Skill Reporter faces the same graph need when linking skills to roles, regions, confidence bands, and report sections.</div>
+
+    <p>A <span class="jargon">knowledge graph</span> (a network of things joined by labelled links) turns prose into explicit facts. Each <span class="jargon">entity</span> (one distinct thing, such as a product, bank, or interest rate, represented as a node) is connected by a <span class="jargon">relationship</span> or <span class="jargon">edge</span> (a labelled, one-directional link between two entities). The smallest useful graph fact is a <span class="jargon">triple</span> (subject → relationship → object), such as “Easy Saver → HAS_RATE → 4.1%.”</p>
+
+    <p>The extraction step asks a model for structured triples rather than a summary. Before storage, names are normalised so “Easy Saver,” “Easy-Saver account,” and “the Easy Saver” can become one node. Relationship direction must also be validated: “Easy Saver → HELD_AT → Partner Bank A” is meaningful, while the reversed edge claims that a bank is held at an account. The small example focuses on normalisation and provenance; it does not implement that domain validation. Each stored edge retains its source document, passage, and extraction time. That provenance makes the edge source-linked; it does not independently prove that the source is true.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+import re
+
+@dataclass(frozen=True)
+class Triple:
+    subject: str
+    relation: str
+    object: str
+    source_document: str
+    passage_id: str
+    extracted_at: datetime
+
+def normalise_entity(name: str) -&gt; str:
+    cleaned = re.sub(r"[^a-z0-9 ]", " ", name.casefold())
+    words = [word for word in cleaned.split() if word not in {"the", "account"}]
+    return " ".join(words)
+
+def add_triple(graph: set[Triple], triple: Triple) -&gt; None:
+    graph.add(replace(triple, subject=normalise_entity(triple.subject),
+                      object=normalise_entity(triple.object)))
+
+graph: set[Triple] = set()
+add_triple(graph, Triple("The Easy-Saver account", "HELD_AT", "Partner Bank A",
+                         "product-sheet-42", "passage-7", datetime.now(timezone.utc)))</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface Triple {
+  subject: string;
+  relation: "HELD_AT" | "HAS_RATE" | "NOTICE_PERIOD";
+  object: string;
+  sourceDocument: string;
+  passageId: string;
+  extractedAt: Date;
+}
+function normaliseEntity(name: string): string {
+  return name.toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/)
+    .filter((word) =&gt; word &amp;&amp; word !== "the" &amp;&amp; word !== "account")
+    .join(" ");
+}
+function addTriple(graph: Map&lt;string, Triple&gt;, triple: Triple): void {
+  const normalised = { ...triple, subject: normaliseEntity(triple.subject),
+    object: normaliseEntity(triple.object) };
+  graph.set(`${normalised.subject}|${normalised.relation}|${normalised.object}`, normalised);
+}
+
+const graph = new Map&lt;string, Triple&gt;();
+addTriple(graph, { subject: "The Easy-Saver account", relation: "HELD_AT",
+  object: "Partner Bank A", sourceDocument: "product-sheet-42",
+  passageId: "passage-7", extractedAt: new Date() });</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1050 390">
+        <defs><marker id="ah21" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <path d="M30 95 H215 L235 115 V260 H30 Z" fill="rgba(30,41,59,0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <path d="M215 95 V115 H235" fill="none" stroke="#94a3b8"/>
+        <text x="132" y="130" fill="white" font-size="12" font-weight="600" text-anchor="middle">Product sheet (raw text)</text>
+        <text x="48" y="165" fill="#94a3b8" font-size="10">Easy Saver is held at</text>
+        <text x="48" y="181" fill="#94a3b8" font-size="10">Partner Bank A. It pays</text>
+        <text x="48" y="197" fill="#94a3b8" font-size="10">4.1% with no notice.</text>
+        <line x1="235" y1="178" x2="290" y2="178" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#ah21)"/>
+
+        <rect x="292" y="55" width="245" height="65" rx="8" fill="rgba(76,29,149,0.45)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="414" y="82" fill="white" font-size="12" font-weight="600" text-anchor="middle">Large language model extraction</text>
+        <text x="414" y="101" fill="#c4b5fd" font-size="9" text-anchor="middle">structured output</text>
+        <line x1="414" y1="120" x2="414" y2="145" stroke="#a78bfa" marker-end="url(#ah21)"/>
+        <rect x="278" y="148" width="272" height="120" rx="7" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/>
+        <text x="414" y="171" fill="white" font-size="11" font-weight="600" text-anchor="middle">Triples</text>
+        <line x1="290" y1="180" x2="538" y2="180" stroke="#334155"/>
+        <text x="292" y="201" fill="#94a3b8" font-size="8">Easy Saver | HELD_AT | Partner Bank A</text>
+        <text x="292" y="224" fill="#94a3b8" font-size="8">Easy Saver | HAS_RATE | 4.1%</text>
+        <text x="292" y="247" fill="#94a3b8" font-size="8">Easy Saver | NOTICE_PERIOD | 0 days</text>
+        <line x1="414" y1="268" x2="414" y2="292" stroke="#fbbf24" marker-end="url(#ah21)"/>
+        <rect x="325" y="294" width="178" height="48" rx="7" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/>
+        <text x="414" y="314" fill="white" font-size="10" font-weight="600" text-anchor="middle">Normalise names</text>
+        <text x="414" y="329" fill="#fde68a" font-size="9" text-anchor="middle">dedupe + attach provenance</text>
+        <line x1="503" y1="318" x2="590" y2="240" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah21)"/>
+
+        <circle cx="730" cy="210" r="55" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="730" y="207" fill="white" font-size="11" font-weight="600" text-anchor="middle">Easy</text>
+        <text x="730" y="223" fill="white" font-size="11" font-weight="600" text-anchor="middle">Saver</text>
+        <circle cx="920" cy="100" r="52" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/>
+        <text x="920" y="97" fill="white" font-size="10" text-anchor="middle">Partner</text><text x="920" y="112" fill="white" font-size="10" text-anchor="middle">Bank A</text>
+        <circle cx="925" cy="215" r="42" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+        <text x="925" y="219" fill="white" font-size="11" text-anchor="middle">4.1%</text>
+        <circle cx="910" cy="320" r="42" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/>
+        <text x="910" y="324" fill="white" font-size="10" text-anchor="middle">0 days</text>
+        <line x1="775" y1="182" x2="868" y2="126" stroke="#22d3ee" marker-end="url(#ah21)"/>
+        <text x="816" y="143" fill="#22d3ee" font-size="8" text-anchor="middle">HELD_AT</text>
+        <line x1="785" y1="211" x2="881" y2="214" stroke="#34d399" marker-end="url(#ah21)"/>
+        <text x="833" y="203" fill="#34d399" font-size="8" text-anchor="middle">HAS_RATE</text>
+        <line x1="774" y1="240" x2="870" y2="296" stroke="#fbbf24" marker-end="url(#ah21)"/>
+        <text x="826" y="282" fill="#fbbf24" font-size="8" text-anchor="middle">NOTICE_PERIOD</text>
+        <ellipse cx="730" cy="332" rx="90" ry="13" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+        <rect x="640" y="332" width="180" height="30" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/>
+        <ellipse cx="730" cy="362" rx="90" ry="13" fill="rgba(30,41,59,0.6)" stroke="#94a3b8"/>
+        <text x="730" y="351" fill="white" font-size="10" text-anchor="middle">Graph store</text>
+      </svg>
+      <p class="diagram-caption">RAW PRODUCT TEXT → STRUCTURED TRIPLES → NAME NORMALISATION AND DEDUPLICATION → QUERYABLE ENTITIES AND LABELLED RELATIONSHIPS</p>
+    </div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the verified run extracted four triples and, when queried for one entity, traversed only its two outgoing edges. That demonstrates directed traversal on the tested graph; it does not establish that every model-extracted relationship is correct.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release answers questions such as “which easy-access accounts are held at a different bank?” from the snapshot's banking-group field for each holding (read through <code class="inline">readSnapshot</code>) and the catalogue's access types (through <code class="inline">queryCatalogue</code>), not from a graph. A source-linked product graph like this one is deferred until questions need relationships the catalogue cannot express; when it arrives, it must follow source-linked edges instead of guessing from similar-sounding passages. Skill Reporter can build the equivalent graph over skills and reports under the same source-linked edge discipline before making claims.</div>
+  </article>
+
+  <!-- LESSON 28 -->
+  <article class="lesson" id="lesson-28">
+    <span class="lesson-tag">Lesson 28</span>
+    <h3>Semantic Conversation Memory</h3>
+    <div class="problem"><b>The problem:</b> a customer may say “I'm saving for a house deposit” and return to that goal twenty messages later. A chat system that keeps only the latest few turns has already discarded it. The agent needs to recall an earlier turn because it is relevant, not merely because it is recent. Skill Reporter has the same failure mode when a reporter's earlier constraint (for example "UK-only roles" or "weekly summary format") is dropped mid-session.</div>
+
+    <p>A model can read only its <span class="jargon">context window</span> (the maximum number of tokens it can consider at once; anything outside that limit is invisible). <span class="jargon">Sliding window memory</span> (keeping only the last N messages and dropping the rest) controls that limit but forgets long-running goals. <span class="jargon">Semantic memory</span> (storing past turns as embeddings, or meaning fingerprints, so they can be searched by meaning rather than position) lets the current message retrieve a relevant statement from much earlier in the conversation.</p>
+
+    <p>Relevance alone is not enough when a customer changes their mind. <span class="jargon">Recency weighting</span> (giving newer memories a small ranking boost) helps a recent correction outrank an older, equally relevant preference. Similarity search (ranking stored memories by closeness of meaning) selects older turns, while prompt assembly (combining chosen memory with recent turns for the model) controls what is sent. The example stays within one conversation; cross-session retention additionally needs authenticated customer identity, consent, deletion rules, retention limits, and tenant isolation.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass
+from datetime import datetime, timezone
+from math import sqrt
+from typing import Awaitable, Callable
+
+@dataclass(frozen=True)
+class Memory:
+    text: str
+    created_at: datetime
+    embedding: list[float]
+    embedding_model: str
+
+def cosine_similarity(left: list[float], right: list[float]) -&gt; float:
+    if len(left) != len(right) or not left:
+        raise ValueError("embedding dimensions must match and be non-empty")
+    left_norm = sqrt(sum(value * value for value in left))
+    right_norm = sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
+        raise ValueError("embeddings must have non-zero magnitude")
+    return sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)
+
+async def recall(query: str, memories: list[Memory], embedding_model: str,
+                 embed: Callable[[str], Awaitable[list[float]]]) -&gt; list[Memory]:
+    query_vector = await embed(query)
+    now = datetime.now(timezone.utc)
+    def score(memory: Memory) -&gt; float:
+        if memory.embedding_model != embedding_model:
+            raise ValueError("embedding model mismatch")
+        similarity = cosine_similarity(query_vector, memory.embedding)
+        recency = 1 / (1 + max(0, (now - memory.created_at).days))
+        return similarity + 0.05 * recency
+    return sorted(memories, key=score, reverse=True)[:3]</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface Memory {
+  text: string;
+  createdAt: Date;
+  embedding: number[];
+  embeddingModel: string;
+}
+
+type Embed = (text: string) =&gt; Promise&lt;number[]&gt;;
+
+function cosineSimilarity(left: number[], right: number[]): number {
+  if (left.length === 0 || left.length !== right.length) {
+    throw new Error("embedding dimensions must match and be non-empty");
+  }
+  const dot = left.reduce((sum, value, index) =&gt; sum + value * right[index], 0);
+  const leftNorm = Math.sqrt(left.reduce((sum, value) =&gt; sum + value * value, 0));
+  const rightNorm = Math.sqrt(right.reduce((sum, value) =&gt; sum + value * value, 0));
+  if (leftNorm === 0 || rightNorm === 0) throw new Error("embeddings must have non-zero magnitude");
+  return dot / (leftNorm * rightNorm);
+}
+
+async function recall(query: string, memories: Memory[],
+  embeddingModel: string, embed: Embed): Promise&lt;Memory[]&gt; {
+  const queryVector = await embed(query);
+  const score = (memory: Memory): number =&gt; {
+    if (memory.embeddingModel !== embeddingModel) throw new Error("embedding model mismatch");
+    const similarity = cosineSimilarity(queryVector, memory.embedding);
+    const ageDays = Math.max(0, (Date.now() - memory.createdAt.getTime()) / 86_400_000);
+    return similarity + 0.05 / (1 + ageDays);
+  };
+  return [...memories].sort((a, b) =&gt; score(b) - score(a)).slice(0, 3);
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1100 420">
+        <defs><marker id="ah28" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <text x="30" y="32" fill="#94a3b8" font-size="10">Conversation timeline</text>
+        <g fill="rgba(30,41,59,0.55)" stroke="#475569">
+          <rect x="25" y="48" width="87" height="45" rx="7"/><rect x="120" y="48" width="87" height="45" rx="7" stroke="#fbbf24" stroke-width="2"/><rect x="215" y="48" width="87" height="45" rx="7"/><rect x="310" y="48" width="87" height="45" rx="7"/><rect x="405" y="48" width="87" height="45" rx="7"/><rect x="500" y="48" width="87" height="45" rx="7"/><rect x="595" y="48" width="87" height="45" rx="7"/><rect x="690" y="48" width="87" height="45" rx="7" fill="rgba(71,85,105,0.7)"/><rect x="785" y="48" width="87" height="45" rx="7" fill="rgba(71,85,105,0.7)"/><rect x="880" y="48" width="87" height="45" rx="7" fill="rgba(71,85,105,0.7)"/>
+        </g>
+        <g fill="white" font-size="9" text-anchor="middle"><text x="68" y="75">Turn 1</text><text x="163" y="75">Turn 2</text><text x="258" y="75">Turn 3</text><text x="353" y="75">Turn 4</text><text x="448" y="75">Turn 5</text><text x="543" y="75">Turn 6</text><text x="638" y="75">Turn 7</text><text x="733" y="75">Turn 8</text><text x="828" y="75">Turn 9</text><text x="923" y="75">Turn 10</text></g>
+        <text x="163" y="113" fill="#fbbf24" font-size="9" text-anchor="middle">“Saving for a house deposit”</text>
+        <path d="M690 104 V120 H967 V104" fill="none" stroke="#94a3b8"/>
+        <text x="828" y="136" fill="#94a3b8" font-size="9" text-anchor="middle">Sliding window (last 3)</text>
+        <g stroke="#22d3ee" opacity="0.35"><line x1="68" y1="93" x2="230" y2="202"/><line x1="163" y1="93" x2="290" y2="202"/><line x1="258" y1="93" x2="350" y2="202"/><line x1="353" y1="93" x2="410" y2="202"/><line x1="448" y1="93" x2="470" y2="202"/><line x1="543" y1="93" x2="530" y2="202"/><line x1="638" y1="93" x2="590" y2="202"/><line x1="733" y1="93" x2="650" y2="202"/><line x1="828" y1="93" x2="710" y2="202"/><line x1="923" y1="93" x2="770" y2="202"/></g>
+        <ellipse cx="500" cy="205" rx="300" ry="18" fill="rgba(8,51,68,0.6)" stroke="#22d3ee"/>
+        <rect x="200" y="205" width="600" height="58" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/>
+        <ellipse cx="500" cy="263" rx="300" ry="18" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/>
+        <text x="500" y="239" fill="white" font-size="12" font-weight="600" text-anchor="middle">Session memory store (embeddings)</text>
+
+        <rect x="25" y="310" width="220" height="67" rx="8" fill="rgba(30,41,59,0.55)" stroke="#94a3b8"/>
+        <text x="135" y="335" fill="white" font-size="10" font-weight="600" text-anchor="middle">New message</text>
+        <text x="135" y="354" fill="#94a3b8" font-size="9" text-anchor="middle">“Which account suits my goal?”</text>
+        <line x1="245" y1="343" x2="300" y2="343" stroke="#22d3ee" marker-end="url(#ah28)"/>
+        <rect x="302" y="310" width="190" height="67" rx="8" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/>
+        <text x="397" y="338" fill="white" font-size="10" font-weight="600" text-anchor="middle">Embed + similarity search</text>
+        <text x="397" y="356" fill="#67e8f9" font-size="9" text-anchor="middle">with recency weighting</text>
+        <path d="M397 310 Q400 282 430 268" fill="none" stroke="#22d3ee" marker-end="url(#ah28)"/>
+        <path d="M680 268 Q715 292 722 310" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah28)"/>
+        <rect x="570" y="310" width="235" height="67" rx="8" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/>
+        <text x="687" y="337" fill="white" font-size="10" font-weight="600" text-anchor="middle">Turn 2 retrieved</text>
+        <text x="687" y="356" fill="#fde68a" font-size="9" text-anchor="middle">score 0.81, recency-adjusted</text>
+        <line x1="805" y1="343" x2="850" y2="343" stroke="#a78bfa" marker-end="url(#ah28)"/>
+        <rect x="852" y="275" width="145" height="72" rx="8" fill="rgba(76,29,149,0.45)" stroke="#a78bfa"/>
+        <text x="924" y="307" fill="white" font-size="11" font-weight="600" text-anchor="middle">Prompt assembly</text>
+        <text x="924" y="326" fill="#c4b5fd" font-size="9" text-anchor="middle">memory + last 3</text>
+        <path d="M828 137 Q1035 180 925 274" fill="none" stroke="#94a3b8" stroke-dasharray="4,3" marker-end="url(#ah28)"/>
+        <line x1="997" y1="311" x2="1030" y2="311" stroke="#34d399" marker-end="url(#ah28)"/>
+        <rect x="1032" y="280" width="55" height="62" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+        <text x="1059" y="315" fill="white" font-size="10" text-anchor="middle">Model</text>
+      </svg>
+      <p class="diagram-caption">EVERY TURN ENTERS SEMANTIC MEMORY → A NEW MESSAGE RETRIEVES RELEVANT OLDER TURNS → THOSE MEMORIES JOIN THE LATEST TURNS IN THE MODEL PROMPT</p>
+    </div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a threshold of 0.75 silently returned no memories in the measured run. Relevant memories scored 0.4502 and 0.5513, so the exercise calibrated the threshold to 0.35; TypeScript reproduced those scores. The lesson is to calibrate against observed distributions rather than assume a universal cutoff.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release keeps no semantic memory of a customer's goals or circumstances; each turn's facts come from a fresh snapshot frozen as evidence. If conversation memory is added later, this lesson's rule holds: memories only choose what to look up, and every product figure is still fetched fresh from product data. Skill Reporter applies the same rule: memory chooses retrieval context, but final report figures are re-fetched from current sources.</div>
+  </article>
+
+  <!-- LESSON 34 -->
+  <article class="lesson" id="lesson-34">
+    <span class="lesson-tag">Lesson 34</span>
+    <h3>Graph-Based Entity Memory &amp; Relationship Resolution</h3>
+    <div class="problem"><b>The problem:</b> a customer says “my partner's ISA,” “the joint account,” and later “that one I opened last year.” The agent must decide whether each phrase points to something already known or introduces something new. A pile of disconnected notes cannot reliably support that decision or preserve how a fact changed. Skill Reporter needs the same entity resolution when users alternate between aliases like “that backend Rust track,” “the infra report,” and a formal skill identifier.</div>
+
+    <p><span class="jargon">Entity memory</span> (a running record of the specific people, accounts, and goals mentioned so far, together with facts about each) gives the conversation a stable set of things. <span class="jargon">Entity resolution</span> (deciding whether a new phrase such as “the joint one” refers to an existing entry or a new one) connects each mention to that set. The resolver can use names, ownership, account type, and nearby conversation context, but uncertain matches should remain uncertain rather than being forced.</p>
+
+    <p>Changing facts need <span class="jargon">fact supersession</span> (marking an older fact out of date when a new fact replaces it, instead of deleting or silently overwriting it). Every version also carries <span class="jargon">provenance</span> (where and when the fact came from, so it can later be traced and checked). The small resolver below matches known aliases, creates a new entity when none match, and refuses an ambiguous match; production matching can add account type and conversation context without removing that ambiguity branch.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from dataclasses import dataclass, replace
+from datetime import datetime
+
+@dataclass(frozen=True)
+class Entity:
+    entity_id: str
+    aliases: frozenset[str]
+
+@dataclass(frozen=True)
+class Fact:
+    entity_id: str
+    key: str
+    value: str
+    observed_at: datetime
+    source_turn: int
+    current: bool = True
+
+def normalise_mention(text: str) -&gt; str:
+    return " ".join(text.casefold().split())
+
+def resolve_or_create(mention: str, entities: list[Entity],
+                      new_entity_id: str) -&gt; tuple[str, list[Entity]]:
+    target = normalise_mention(mention)
+    matches = [entity for entity in entities
+               if target in {normalise_mention(alias) for alias in entity.aliases}]
+    if len(matches) == 1:
+        return matches[0].entity_id, entities
+    if len(matches) &gt; 1:
+        raise ValueError("ambiguous entity mention")
+    created = Entity(new_entity_id, frozenset({mention}))
+    return created.entity_id, [*entities, created]
+
+def supersede(facts: list[Fact], new_fact: Fact) -&gt; list[Fact]:
+    history = [replace(fact, current=False)
+               if fact.entity_id == new_fact.entity_id and fact.key == new_fact.key
+               else fact for fact in facts]
+    return [*history, replace(new_fact, current=True)]</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface Entity {
+  entityId: string;
+  aliases: string[];
+}
+interface Fact {
+  entityId: string;
+  key: string;
+  value: string;
+  observedAt: Date;
+  sourceTurn: number;
+  current: boolean;
+}
+
+const normaliseMention = (text: string): string =&gt;
+  text.toLowerCase().trim().split(/\s+/).join(" ");
+
+function resolveOrCreate(mention: string, entities: Entity[], newEntityId: string): {
+  entityId: string; entities: Entity[];
+} {
+  const target = normaliseMention(mention);
+  const matches = entities.filter((entity) =&gt;
+    entity.aliases.some((alias) =&gt; normaliseMention(alias) === target));
+  if (matches.length === 1) return { entityId: matches[0].entityId, entities };
+  if (matches.length &gt; 1) throw new Error("ambiguous entity mention");
+  const created = { entityId: newEntityId, aliases: [mention] };
+  return { entityId: created.entityId, entities: [...entities, created] };
+}
+
+function supersede(facts: Fact[], newFact: Fact): Fact[] {
+  const history = facts.map((fact) =&gt;
+    fact.entityId === newFact.entityId &amp;&amp; fact.key === newFact.key
+      ? { ...fact, current: false }
+      : fact,
+  );
+  return [...history, { ...newFact, current: true }];
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1080 390">
+        <defs><marker id="ah34" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <path d="M25 145 Q25 125 45 125 H230 Q250 125 250 145 V210 Q250 230 230 230 H90 L60 255 L68 230 H45 Q25 230 25 210 Z" fill="rgba(30,41,59,0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="138" y="158" fill="white" font-size="11" font-weight="600" text-anchor="middle">New turn</text>
+        <text x="138" y="181" fill="#94a3b8" font-size="10" text-anchor="middle">“What is the rate on</text>
+        <text x="138" y="198" fill="#94a3b8" font-size="10" text-anchor="middle">the joint one?”</text>
+        <line x1="250" y1="178" x2="300" y2="178" stroke="#fbbf24" marker-end="url(#ah34)"/>
+        <rect x="302" y="140" width="150" height="76" rx="8" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/>
+        <text x="377" y="169" fill="white" font-size="11" font-weight="600" text-anchor="middle">Extract mentions</text>
+        <rect x="330" y="183" width="94" height="22" rx="11" fill="rgba(120,53,15,0.55)" stroke="#fbbf24"/>
+        <text x="377" y="198" fill="#fde68a" font-size="9" text-anchor="middle">“the joint one”</text>
+        <line x1="452" y1="178" x2="496" y2="178" stroke="#a78bfa" marker-end="url(#ah34)"/>
+        <polygon points="550,120 615,178 550,236 485,178" fill="rgba(76,29,149,0.45)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="550" y="173" fill="white" font-size="10" font-weight="600" text-anchor="middle">Resolve:</text>
+        <text x="550" y="190" fill="white" font-size="10" font-weight="600" text-anchor="middle">match existing?</text>
+        <path d="M615 165 Q650 130 690 142" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah34)"/>
+        <text x="657" y="122" fill="#34d399" font-size="9" text-anchor="middle">yes: Joint Account</text>
+        <path d="M615 195 Q650 246 693 235" fill="none" stroke="#94a3b8" stroke-dasharray="5,4" marker-end="url(#ah34)"/>
+        <text x="662" y="270" fill="#94a3b8" font-size="9" text-anchor="middle">no → create new node</text>
+
+        <rect x="695" y="35" width="360" height="325" rx="12" fill="rgba(15,23,42,0.7)" stroke="#475569"/>
+        <text x="715" y="60" fill="#94a3b8" font-size="10">Per-conversation entity graph</text>
+        <circle cx="770" cy="177" r="42" fill="rgba(76,29,149,0.4)" stroke="#a78bfa"/>
+        <text x="770" y="181" fill="white" font-size="10" text-anchor="middle">Customer</text>
+        <circle cx="915" cy="110" r="44" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/>
+        <text x="915" y="106" fill="white" font-size="9" text-anchor="middle">Joint</text><text x="915" y="121" fill="white" font-size="9" text-anchor="middle">Account</text>
+        <circle cx="915" cy="218" r="39" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/>
+        <text x="915" y="222" fill="white" font-size="9" text-anchor="middle">Cash ISA</text>
+        <circle cx="800" cy="304" r="45" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/>
+        <text x="800" y="299" fill="white" font-size="9" text-anchor="middle">House</text><text x="800" y="314" fill="white" font-size="9" text-anchor="middle">deposit</text>
+        <line x1="807" y1="160" x2="873" y2="129" stroke="#22d3ee" marker-end="url(#ah34)"/><text x="837" y="135" fill="#22d3ee" font-size="8">OWNS</text>
+        <line x1="810" y1="188" x2="876" y2="207" stroke="#22d3ee" marker-end="url(#ah34)"/><text x="843" y="210" fill="#22d3ee" font-size="8">OWNS</text>
+        <line x1="778" y1="219" x2="791" y2="258" stroke="#fbbf24" marker-end="url(#ah34)"/><text x="731" y="247" fill="#fbbf24" font-size="8">HAS_GOAL</text>
+        <rect x="970" y="76" width="72" height="43" rx="5" fill="rgba(71,85,105,0.5)" stroke="#64748b"/>
+        <text x="1006" y="91" fill="#94a3b8" font-size="7" text-anchor="middle">balance £2,000</text><text x="1006" y="103" fill="#94a3b8" font-size="7" text-anchor="middle">turn 3 · superseded</text>
+        <line x1="977" y1="96" x2="1035" y2="96" stroke="#fb7185"/>
+        <text x="1006" y="114" fill="#94a3b8" font-size="7" text-anchor="middle">◷ provenance</text>
+        <rect x="970" y="127" width="72" height="43" rx="5" fill="rgba(6,78,59,0.5)" stroke="#34d399"/>
+        <text x="1006" y="142" fill="#d1fae5" font-size="7" text-anchor="middle">balance £1,500</text><text x="1006" y="154" fill="#d1fae5" font-size="7" text-anchor="middle">turn 9 · current</text>
+        <text x="1006" y="166" fill="#34d399" font-size="7" text-anchor="middle">◷ provenance</text>
+      </svg>
+      <p class="diagram-caption">A NEW MENTION IS EXTRACTED → RESOLVED TO AN EXISTING ENTITY OR MADE INTO A NEW ONE → CHANGING FACTS KEEP CURRENT AND SUPERSEDED VERSIONS WITH PROVENANCE</p>
+    </div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the TypeScript port reached a live structured-output schema rejection because a defaulted Zod field had been omitted from the schema's <code class="inline">required</code> list. Defaults in application code do not necessarily make a field optional to an external structured-output API; the generated schema must satisfy that API's rules.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release does not keep a per-conversation entity graph. A reference such as “my other ISA” is resolved against the holdings in that turn's snapshot, each with its own holding reference, and a reference that cannot be resolved to one holding ends with a person rather than a guess. Any balance Eunomia repeats comes from the frozen snapshot with its as-of time, and the verifier rejects any figure that is not in it. Skill Reporter uses the same entity-memory pattern so references like “that other dashboard skill” resolve to one canonical skill ID before retrieval.</div>
+  </article>
+
+  <!-- LESSON 49 -->
+  <article class="lesson" id="lesson-49">
+    <span class="lesson-tag">Lesson 49</span>
+    <h3>Updating Search Indexes Safely with RRF</h3>
+    <div class="problem"><b>The problem:</b> rebuilding an entire search index because one interest rate changed is slow and wasteful. Merely adding the new version is worse: the old rate remains searchable, so the agent can still quote withdrawn information. An update must remove precisely what became stale, add precisely what changed, and preserve fair hybrid ranking. Skill Reporter has the same correctness risk when one skill definition or demand tier changes but stale versions remain retrievable.</div>
+
+    <p>Search works on a <span class="jargon">chunk</span> (a small passage cut from a larger document) rather than a whole product sheet. <span class="jargon">Cache invalidation</span> (removing stored results that are no longer true so they cannot be served again) starts with a manifest that records every chunk owned by a document. A <span class="jargon">content hash</span> (a short fingerprint calculated from a chunk's text) makes a text change overwhelmingly likely to produce a new ID; an occurrence key keeps identical repeated chunks distinct. Comparing the old and new manifests identifies unchanged chunks to keep, stale chunks to delete, and new chunks to index.</p>
+
+    <p>The update must apply to both the dense index (the meaning-based store) and sparse index (the exact-word store) as one atomic commit, so readers see either the old version or the new version rather than a partial mixture. Content-derived IDs do not replace ownership metadata: the old document manifest is what makes stale IDs discoverable.</p>
+
+    <p>The query side uses <span class="jargon">Reciprocal Rank Fusion</span>, or <span class="jargon">RRF</span> (merging ranked lists from each result's position rather than its raw score). Rank starts at 1. Each result earns <code class="inline">1 ÷ (k + rank)</code> from each list, and those contributions are added; <code class="inline">k</code> is a smoothing constant (a value that limits how sharply scores fall by rank), commonly 60. Dense and keyword scores can live on completely different scales because RRF never compares them directly.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from collections import defaultdict
+from hashlib import sha256
+from typing import Protocol
+
+Manifest = dict[str, str]
+
+class IndexTransaction(Protocol):
+    def delete_from_both(self, chunk_id: str) -&gt; None: ...
+    def upsert_into_both(self, chunk_id: str, text: str) -&gt; None: ...
+    def commit(self, manifest: Manifest) -&gt; None: ...
+
+def content_id(document_id: str, occurrence: str, text: str) -&gt; str:
+    digest = sha256(text.encode("utf-8")).hexdigest()[:12]
+    return f"{document_id}:{occurrence}:{digest}"
+
+def replace_document(document_id: str, old_manifest: Manifest,
+                     chunks: dict[str, str], transaction: IndexTransaction) -&gt; Manifest:
+    new_manifest = {occurrence: content_id(document_id, occurrence, text)
+                    for occurrence, text in chunks.items()}
+    old_ids, new_ids = set(old_manifest.values()), set(new_manifest.values())
+    for stale_id in old_ids - new_ids:
+        transaction.delete_from_both(stale_id)
+    for occurrence, new_id in new_manifest.items():
+        if new_id not in old_ids:
+            transaction.upsert_into_both(new_id, chunks[occurrence])
+    transaction.commit(new_manifest)
+    return new_manifest
+
+def reciprocal_rank_fusion(rankings: list[list[str]], k: int = 60) -&gt; list[str]:
+    scores: defaultdict[str, float] = defaultdict(float)
+    for ranking in rankings:
+        for rank, chunk_id in enumerate(ranking, start=1):
+            scores[chunk_id] += 1 / (k + rank)
+    return sorted(scores, key=lambda chunk_id: (-scores[chunk_id], chunk_id))</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>import { createHash } from "node:crypto";
+
+type Manifest = Record&lt;string, string&gt;;
+interface IndexTransaction {
+  deleteFromBoth(chunkId: string): void;
+  upsertIntoBoth(chunkId: string, text: string): void;
+  commit(manifest: Manifest): void;
+}
+
+function contentId(documentId: string, occurrence: string, text: string): string {
+  const digest = createHash("sha256").update(text).digest("hex").slice(0, 12);
+  return `${documentId}:${occurrence}:${digest}`;
+}
+
+function replaceDocument(documentId: string, oldManifest: Manifest,
+  chunks: Record&lt;string, string&gt;, transaction: IndexTransaction): Manifest {
+  const newManifest = Object.fromEntries(Object.entries(chunks).map(([occurrence, text]) =&gt;
+    [occurrence, contentId(documentId, occurrence, text)]));
+  const oldIds = new Set(Object.values(oldManifest));
+  const newIds = new Set(Object.values(newManifest));
+  for (const staleId of oldIds) {
+    if (!newIds.has(staleId)) transaction.deleteFromBoth(staleId);
+  }
+  for (const [occurrence, newId] of Object.entries(newManifest)) {
+    if (!oldIds.has(newId)) transaction.upsertIntoBoth(newId, chunks[occurrence]);
+  }
+  transaction.commit(newManifest);
+  return newManifest;
+}
+
+function reciprocalRankFusion(rankings: string[][], k = 60): string[] {
+  const scores = new Map&lt;string, number&gt;();
+  for (const ranking of rankings) {
+    ranking.forEach((chunkId, index) =&gt; {
+      scores.set(chunkId, (scores.get(chunkId) ?? 0) + 1 / (k + index + 1));
+    });
+  }
+  return [...scores].sort((a, b) =&gt; b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([chunkId]) =&gt; chunkId);
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1120 500">
+        <defs><marker id="ah49" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <text x="25" y="28" fill="#fbbf24" font-size="11" font-weight="600">UPDATE PATH</text>
+        <line x1="25" y1="38" x2="1090" y2="38" stroke="#334155"/>
+        <path d="M25 70 H170 L188 88 V158 H25 Z" fill="rgba(30,41,59,0.55)" stroke="#94a3b8"/>
+        <text x="106" y="100" fill="white" font-size="10" font-weight="600" text-anchor="middle">Product sheet v2</text>
+        <text x="106" y="120" fill="#94a3b8" font-size="9" text-anchor="middle">rate changed</text>
+        <line x1="188" y1="114" x2="225" y2="114" stroke="#fbbf24" marker-end="url(#ah49)"/>
+        <rect x="227" y="78" width="175" height="72" rx="8" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/>
+        <text x="314" y="106" fill="white" font-size="10" font-weight="600" text-anchor="middle">Re-chunk + hash</text>
+        <text x="314" y="124" fill="#fde68a" font-size="9" text-anchor="middle">each chunk</text>
+        <line x1="402" y1="114" x2="440" y2="114" stroke="#a78bfa" marker-end="url(#ah49)"/>
+        <polygon points="500,65 560,114 500,163 440,114" fill="rgba(76,29,149,0.45)" stroke="#a78bfa"/>
+        <text x="500" y="108" fill="white" font-size="9" text-anchor="middle">Compare hashes</text><text x="500" y="122" fill="white" font-size="9" text-anchor="middle">with v1</text>
+        <path d="M554 94 L620 65" fill="none" stroke="#94a3b8" marker-end="url(#ah49)"/><text x="588" y="68" fill="#94a3b8" font-size="8">unchanged → keep</text>
+        <path d="M560 114 L620 114" fill="none" stroke="#fb7185" marker-end="url(#ah49)"/><text x="590" y="104" fill="#fb7185" font-size="8" text-anchor="middle">changed → delete</text>
+        <path d="M554 134 L620 164" fill="none" stroke="#34d399" marker-end="url(#ah49)"/><text x="588" y="177" fill="#34d399" font-size="8" text-anchor="middle">new → embed + index</text>
+        <rect x="622" y="42" width="150" height="45" rx="7" fill="rgba(30,41,59,0.55)" stroke="#94a3b8"/><text x="697" y="70" fill="white" font-size="9" text-anchor="middle">Chunks 1, 2, 4</text>
+        <rect x="622" y="93" width="150" height="45" rx="7" fill="rgba(136,19,55,0.35)" stroke="#fb7185"/><text x="645" y="121" fill="#fb7185" font-size="15">✕</text><text x="708" y="120" fill="white" font-size="9" text-anchor="middle">Chunk 3 (old rate)</text>
+        <rect x="622" y="144" width="150" height="45" rx="7" fill="rgba(6,78,59,0.4)" stroke="#34d399"/><text x="697" y="172" fill="white" font-size="9" text-anchor="middle">Chunk 3′ (new rate)</text>
+        <path d="M772 115 Q810 100 842 112" fill="none" stroke="#fb7185" marker-end="url(#ah49)"/><path d="M772 115 Q900 55 972 112" fill="none" stroke="#fb7185" marker-end="url(#ah49)"/>
+        <path d="M772 166 Q810 180 842 164" fill="none" stroke="#34d399" marker-end="url(#ah49)"/><path d="M772 166 Q900 205 972 164" fill="none" stroke="#34d399" marker-end="url(#ah49)"/>
+        <ellipse cx="900" cy="92" rx="58" ry="12" fill="rgba(8,51,68,0.6)" stroke="#22d3ee"/><rect x="842" y="92" width="116" height="50" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/><ellipse cx="900" cy="142" rx="58" ry="12" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/><text x="900" y="121" fill="white" font-size="9" text-anchor="middle">Dense index</text>
+        <ellipse cx="1030" cy="92" rx="58" ry="12" fill="rgba(120,53,15,0.5)" stroke="#fbbf24"/><rect x="972" y="92" width="116" height="50" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/><ellipse cx="1030" cy="142" rx="58" ry="12" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/><text x="1030" y="121" fill="white" font-size="9" text-anchor="middle">Sparse index</text>
+
+        <text x="25" y="237" fill="#22d3ee" font-size="11" font-weight="600">QUERY PATH</text>
+        <line x1="25" y1="247" x2="1090" y2="247" stroke="#334155"/>
+        <rect x="30" y="320" width="110" height="55" rx="8" fill="rgba(30,41,59,0.55)" stroke="#94a3b8"/><text x="85" y="352" fill="white" font-size="11" text-anchor="middle">Query</text>
+        <path d="M140 340 Q240 270 350 300" fill="none" stroke="#22d3ee" marker-end="url(#ah49)"/><path d="M140 357 Q240 440 350 405" fill="none" stroke="#fbbf24" marker-end="url(#ah49)"/>
+        <ellipse cx="410" cy="285" rx="60" ry="12" fill="rgba(8,51,68,0.6)" stroke="#22d3ee"/><rect x="350" y="285" width="120" height="50" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/><ellipse cx="410" cy="335" rx="60" ry="12" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/><text x="410" y="314" fill="white" font-size="9" text-anchor="middle">Dense index</text>
+        <ellipse cx="410" cy="390" rx="60" ry="12" fill="rgba(120,53,15,0.5)" stroke="#fbbf24"/><rect x="350" y="390" width="120" height="50" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/><ellipse cx="410" cy="440" rx="60" ry="12" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/><text x="410" y="419" fill="white" font-size="9" text-anchor="middle">Sparse index</text>
+        <line x1="470" y1="310" x2="520" y2="310" stroke="#22d3ee" marker-end="url(#ah49)"/><line x1="470" y1="415" x2="520" y2="415" stroke="#fbbf24" marker-end="url(#ah49)"/>
+        <rect x="522" y="278" width="170" height="65" rx="7" fill="rgba(30,41,59,0.55)" stroke="#22d3ee"/><text x="607" y="304" fill="white" font-size="10" text-anchor="middle">Dense ranks</text><text x="607" y="324" fill="#67e8f9" font-size="10" text-anchor="middle">A1, B2, C3</text>
+        <rect x="522" y="383" width="170" height="65" rx="7" fill="rgba(30,41,59,0.55)" stroke="#fbbf24"/><text x="607" y="409" fill="white" font-size="10" text-anchor="middle">Sparse ranks</text><text x="607" y="429" fill="#fde68a" font-size="10" text-anchor="middle">B1, C2, A3</text>
+        <path d="M692 310 Q735 325 765 350" fill="none" stroke="#a78bfa" marker-end="url(#ah49)"/><path d="M692 415 Q735 400 765 375" fill="none" stroke="#a78bfa" marker-end="url(#ah49)"/>
+        <rect x="767" y="323" width="190" height="78" rx="8" fill="rgba(76,29,149,0.45)" stroke="#a78bfa" stroke-width="1.5"/><text x="862" y="351" fill="white" font-size="11" font-weight="600" text-anchor="middle">RRF: Σ 1/(60 + rank)</text><text x="862" y="374" fill="#c4b5fd" font-size="9" text-anchor="middle">rank position only</text><text x="862" y="389" fill="#c4b5fd" font-size="9" text-anchor="middle">score scales no longer matter</text>
+        <line x1="957" y1="362" x2="990" y2="362" stroke="#34d399" marker-end="url(#ah49)"/><rect x="992" y="330" width="105" height="64" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399"/><text x="1044" y="354" fill="white" font-size="10" text-anchor="middle">Fused list</text><text x="1044" y="376" fill="#34d399" font-size="11" text-anchor="middle">B, A, C</text>
+      </svg>
+      <p class="diagram-caption">UPDATE PATH: HASHES KEEP, DELETE, OR RE-INDEX PRECISE CHUNKS · QUERY PATH: DENSE AND SPARSE RANKS MERGE THROUGH RRF WITHOUT MIXING RAW SCORE SCALES</p>
+    </div>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the verified update removed the stale chunk while leaving an unrelated chunk in place, directly demonstrating targeted eviction. The Python and TypeScript RRF scores also matched for the tested rankings. Those checks establish the intended behaviour for that case, while production still needs an atomic transaction or versioned index alias around publication.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> when a savings rate changes, <b>Eunomia</b> publishes a new catalogue version, and any search index behind guidance lookup is staged and swapped atomically, so queries see either the complete old version or the complete new one. Each turn pins the catalogue version in its evidence bundle, so facts do not shift halfway through an answer. RRF keeps exact-name and meaning-based results balanced without hand-tuned score weights. Skill Reporter uses the same staged replacement model when skill definitions change.</div>
+  </article>
+
+  <!-- LESSON 51 -->
+  <article class="lesson" id="lesson-51">
+    <span class="lesson-tag">Lesson 51</span>
+    <h3>Combining Passage and Graph Retrieval</h3>
+    <div class="problem"><b>The problem:</b> vector search can find a convincing passage from the wrong product, while a knowledge graph can confirm that it contains a relationship but does not contain the explanatory text a customer needs. “Sounds right” is not enough. A factual answer should require a matching passage and a source-linked graph relationship, and disagreement must stop the answer rather than invite a guess. Skill Reporter needs the same agreement rule so a report claim is published only when text evidence and graph facts both align.</div>
+
+    <p><span class="jargon">RAG</span> (Retrieval-Augmented Generation: having a model write from documents fetched at question time rather than from facts absorbed during training) supplies the passage. <span class="jargon">Graph-RAG</span> (RAG that also checks a knowledge graph for explicit relationships) supplies a structured representation. Together they improve <span class="jargon">grounding</span> (ensuring every factual claim can be traced to a specific retrieved source).</p>
+
+    <p>The central rule is <span class="jargon">cross-representation consistency</span> (checking that a retrieved passage and a graph edge agree before using either). Both branches compare a shared canonical product ID, bank ID, and notice period rather than display names. Agreement shows that two representations of the source are consistent; it is not independent verification when both came from the same product sheet. Independent verification requires a separate authoritative source, such as a live product system or versioned source of record.</p>
+
+    <p>An entity link (the mapping from a passage mention to a graph entity) performs the join (matching records across the two representations). A mismatch or missing edge produces a decline or clarifying question and a review signal.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Evidence:
+    product_id: str
+    bank_id: str
+    notice_days: int
+    citation: str
+
+@dataclass(frozen=True)
+class GroundedNotice:
+    notice_days: int
+    passage_citation: str
+    graph_citation: str
+
+async def grounded_notice(product_id: str) -&gt; GroundedNotice:
+    passage, graph_fact = await asyncio.gather(
+        search_passage(product_id), lookup_graph(product_id))
+    if passage.product_id != graph_fact.product_id:
+        raise ValueError("product identity mismatch")
+    if passage.bank_id != graph_fact.bank_id:
+        raise ValueError("bank identity mismatch")
+    if passage.notice_days != graph_fact.notice_days:
+        raise ValueError("representations disagree on notice period")
+    return GroundedNotice(passage.notice_days, passage.citation, graph_fact.citation)</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>interface Evidence {
+  productId: string;
+  bankId: string;
+  noticeDays: number;
+  citation: string;
+}
+
+async function groundedNotice(productId: string): Promise&lt;{
+  noticeDays: number;
+  passageCitation: string;
+  graphCitation: string;
+}&gt; {
+  const [passage, graphFact]: [Evidence, Evidence] = await Promise.all([
+    searchPassage(productId),
+    lookupGraph(productId),
+  ]);
+  if (passage.productId !== graphFact.productId) throw new Error("product identity mismatch");
+  if (passage.bankId !== graphFact.bankId) throw new Error("bank identity mismatch");
+  if (passage.noticeDays !== graphFact.noticeDays) {
+    throw new Error("representations disagree on notice period");
+  }
+  return { noticeDays: passage.noticeDays, passageCitation: passage.citation,
+    graphCitation: graphFact.citation };
+}</code></pre></div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 1120 440">
+        <defs><marker id="ah51" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="25" y="165" width="225" height="90" rx="9" fill="rgba(30,41,59,0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="137" y="190" fill="white" font-size="10" font-weight="600" text-anchor="middle">Question</text>
+        <text x="137" y="211" fill="#94a3b8" font-size="9" text-anchor="middle">“What's the notice period on the</text>
+        <text x="137" y="227" fill="#94a3b8" font-size="9" text-anchor="middle">Fixed Saver at Partner Bank A?”</text>
+        <path d="M250 195 Q285 115 325 115" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah51)"/>
+        <path d="M250 225 Q285 315 325 315" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah51)"/>
+        <rect x="327" y="72" width="230" height="75" rx="8" fill="rgba(8,51,68,0.45)" stroke="#22d3ee"/>
+        <text x="442" y="100" fill="white" font-size="11" font-weight="600" text-anchor="middle">Hybrid vector search</text>
+        <text x="442" y="120" fill="#67e8f9" font-size="9" text-anchor="middle">Lessons 14 + 49</text>
+        <line x1="557" y1="110" x2="600" y2="110" stroke="#22d3ee" marker-end="url(#ah51)"/>
+        <rect x="602" y="58" width="225" height="102" rx="7" fill="rgba(30,41,59,0.6)" stroke="#22d3ee"/>
+        <text x="714" y="82" fill="white" font-size="10" font-weight="600" text-anchor="middle">Retrieved passage</text>
+        <text x="714" y="106" fill="#94a3b8" font-size="9" text-anchor="middle">“Fixed Saver …</text>
+        <text x="714" y="122" fill="#94a3b8" font-size="9" text-anchor="middle">90-day notice …”</text>
+        <text x="714" y="143" fill="#67e8f9" font-size="8" text-anchor="middle">passage: product-42/chunk-a7</text>
+
+        <rect x="327" y="278" width="230" height="75" rx="8" fill="rgba(120,53,15,0.35)" stroke="#fbbf24"/>
+        <text x="442" y="306" fill="white" font-size="11" font-weight="600" text-anchor="middle">Entity link → graph lookup</text>
+        <text x="442" y="326" fill="#fde68a" font-size="9" text-anchor="middle">Lesson 21</text>
+        <line x1="557" y1="315" x2="600" y2="315" stroke="#fbbf24" marker-end="url(#ah51)"/>
+        <rect x="602" y="262" width="225" height="108" rx="7" fill="rgba(30,41,59,0.6)" stroke="#fbbf24"/>
+        <circle cx="647" cy="315" r="24" fill="rgba(76,29,149,0.45)" stroke="#a78bfa"/><text x="647" y="312" fill="white" font-size="7" text-anchor="middle">Fixed</text><text x="647" y="323" fill="white" font-size="7" text-anchor="middle">Saver</text>
+        <circle cx="777" cy="286" r="27" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/><text x="777" y="284" fill="white" font-size="7" text-anchor="middle">Partner</text><text x="777" y="295" fill="white" font-size="7" text-anchor="middle">Bank A</text>
+        <circle cx="777" cy="346" r="25" fill="rgba(6,78,59,0.4)" stroke="#34d399"/><text x="777" y="349" fill="white" font-size="8" text-anchor="middle">90 days</text>
+        <line x1="670" y1="309" x2="750" y2="291" stroke="#22d3ee" marker-end="url(#ah51)"/><text x="709" y="290" fill="#22d3ee" font-size="7" text-anchor="middle">HELD_AT</text>
+        <line x1="670" y1="322" x2="752" y2="340" stroke="#34d399" marker-end="url(#ah51)"/><text x="708" y="350" fill="#34d399" font-size="7" text-anchor="middle">NOTICE_PERIOD</text>
+
+        <path d="M827 110 Q865 130 880 182" fill="none" stroke="#a78bfa" marker-end="url(#ah51)"/>
+        <path d="M827 315 Q865 290 880 238" fill="none" stroke="#a78bfa" marker-end="url(#ah51)"/>
+        <polygon points="880,165 935,210 880,255 825,210" fill="rgba(76,29,149,0.5)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="880" y="215" fill="white" font-size="12" font-weight="600" text-anchor="middle">Agree?</text>
+        <line x1="935" y1="210" x2="975" y2="210" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah51)"/><text x="954" y="198" fill="#34d399" font-size="9" text-anchor="middle">yes</text>
+        <rect x="977" y="165" width="128" height="90" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+        <text x="1041" y="191" fill="white" font-size="10" font-weight="600" text-anchor="middle">Grounded answer</text>
+        <text x="1041" y="209" fill="#d1fae5" font-size="8" text-anchor="middle">+ citations</text>
+        <text x="1041" y="226" fill="#d1fae5" font-size="8" text-anchor="middle">passage ID</text>
+        <text x="1041" y="240" fill="#d1fae5" font-size="8" text-anchor="middle">+ graph edge</text>
+        <line x1="880" y1="255" x2="977" y2="302" stroke="#fb7185" stroke-width="1.5" marker-end="url(#ah51)"/><text x="944" y="276" fill="#fb7185" font-size="9">no / missing</text>
+        <rect x="850" y="304" width="255" height="78" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185"/>
+        <text x="977" y="330" fill="white" font-size="10" font-weight="600" text-anchor="middle">Decline or ask a question</text>
+        <text x="977" y="350" fill="#fecdd3" font-size="9" text-anchor="middle">log the mismatch</text>
+        <path d="M977 382 Q925 420 825 410" fill="none" stroke="#94a3b8" stroke-dasharray="5,4" marker-end="url(#ah51)"/>
+        <rect x="650" y="389" width="175" height="38" rx="7" fill="rgba(30,41,59,0.55)" stroke="#94a3b8"/><text x="737" y="413" fill="#94a3b8" font-size="9" text-anchor="middle">Flag source for review</text>
+      </svg>
+      <p class="diagram-caption">THE QUESTION RUNS THROUGH SEARCH AND GRAPH LOOKUP → BOTH REPRESENTATIONS MUST AGREE → AGREEMENT PRODUCES A CITED ANSWER; MISMATCH PRODUCES A SAFE DECLINE AND REVIEW FLAG</p>
+    </div>
+
+    <blockquote>Run the passage lookup and graph lookup at the same time. Serial execution adds both latencies (the waiting time for each operation); parallel execution pays roughly for the slower branch. Python expresses this with <code class="inline">asyncio.gather</code>, while TypeScript uses <code class="inline">Promise.all</code>.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the TypeScript agent completed a verified two-hop graph traversal that the Python run did not, and its raw tool outputs preserved both hops. That is evidence about the observed execution path, not proof that every graph edge or source fact is independently correct.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s first release grounds on a simpler rule: every figure and claim in an answer must come from the turn's frozen evidence bundle (snapshot, catalogue rows and guidance passages), and the verifier rejects anything else. Requiring a retrieved passage (Lesson <a href="#lesson-14">14</a>) and a source-linked graph relationship (Lesson <a href="#lesson-21">21</a>) to agree on canonical product, bank and notice data is deferred until a product graph exists; authoritative freshness still comes from the versioned product source. When evidence is missing or contradictory, Eunomia steps down to a person instead of answering from memory. Skill Reporter applies the same cross-representation check before stating which skill produced or supports a report claim.</div>
+  </article>
+
+  <div class="lesson" id="part-3-through-line">
+    <span class="lesson-tag">Part III Through-Line</span>
+    <h3>From Retrieval to Grounded, Current Facts</h3>
+    <p>Part III is one chain across both domains. Lesson <a href="#lesson-14">14</a> fuses dense and sparse retrieval. Lesson <a href="#lesson-21">21</a> extracts graph facts from source text. Lessons <a href="#lesson-28">28</a> and <a href="#lesson-34">34</a> preserve and resolve conversational memory. Lesson <a href="#lesson-49">49</a> keeps indexes current as sources change. Lesson <a href="#lesson-51">51</a> joins passage and graph evidence so the agent answers only when both representations agree.</p>
+  </div>
+</section>

@@ -1,0 +1,522 @@
+<!-- ======================================================= -->
+<!-- PART IX — SHIPPING IT (HUMAN OVERSIGHT & DEPLOYMENT) -->
+<!-- ======================================================= -->
+<section class="part" id="part-9">
+  <div class="part-header">
+    <div class="part-eyebrow">Part IX</div>
+    <h2>Shipping It (Human Oversight &amp; Deployment)</h2>
+    <p class="part-intro">A useful agent is not shipped merely because it can answer a question. It must stop before sensitive actions, survive a restart while it waits, run the same way outside a developer's laptop, repair safe-to-fix mistakes without weakening permission checks, and keep a live reply coherent when tools or people take time. These five lessons turn Eunomia from working code into a service that can be operated, interrupted, supervised, and verified.</p>
+    <div class="reader-note">
+      <p><b>Dual-domain map for this part:</b> the same deployment-and-approval controls apply to Eunomia and Skill Reporter.</p>
+      <ul>
+        <li><b>Eunomia domain:</b> human approval before sensitive actions, containerized runtime parity, durable approval state across restarts, safe tool-call correction, and typed streaming with approval pauses.</li>
+        <li><b>Skill Reporter domain:</b> the same human approval, container parity, durable pending-state recovery, safe correction, and typed streaming controls for report workflows.</li>
+      </ul>
+      <p><b>Interlink chain:</b> Lesson <a href="#lesson-12">12</a> defines approval checkpoints, Lessons <a href="#lesson-23">23</a> and <a href="#lesson-24">24</a> make those checkpoints survive container lifecycle and process restart, and Lessons <a href="#lesson-47">47</a> and <a href="#lesson-53">53</a> preserve safe correction and typed streaming around those gates.</p>
+    </div>
+  </div>
+
+  <!-- LESSON 12 -->
+  <article class="lesson" id="lesson-12">
+    <span class="lesson-tag">Lesson 12</span>
+    <h3>Human-in-the-Loop &amp; Durable State</h3>
+    <div class="problem"><b>The problem:</b> Eunomia can reach a high-impact customer action when no authorized reviewer is available. Pausing is required, but an in-memory pause disappears on crash or restart, risking lost work, wrong resume points, or duplicate execution. Skill Reporter has the same approval-state risk for privileged report publication actions.</div>
+
+    <p><span class="jargon">Human-in-the-loop (HITL)</span> (requiring a person to review or decide part of an automated task) is safe only when it is paired with <span class="jargon">durable state</span> (saved progress that survives crashes and restarts). A local variable saying “waiting” is not durable. The service needs a <span class="jargon">checkpoint</span> (a saved record of exactly where a task paused) written to storage before anybody is asked to approve the action.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 360" role="img" aria-label="A sensitive action is saved as a durable checkpoint before human approval, then resumed or rejected after a restart.">
+        <defs>
+          <marker id="ah12" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker>
+          <filter id="rough12"><feTurbulence type="fractalNoise" baseFrequency="0.025" numOctaves="2" seed="12" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="1.2"/></filter>
+        </defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <path d="M165 105 C185 101 204 108 225 104" fill="none" stroke="#a78bfa" stroke-width="2" marker-end="url(#ah12)"/>
+        <path d="M385 105 C405 108 425 100 445 105" fill="none" stroke="#fbbf24" stroke-width="2" marker-end="url(#ah12)"/>
+        <path d="M625 105 C645 101 664 108 685 104" fill="none" stroke="#fb7185" stroke-width="2" marker-end="url(#ah12)"/>
+        <path d="M775 140 C775 177 705 185 625 214" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#ah12)"/>
+        <text x="715" y="180" fill="#34d399" font-size="9" text-anchor="middle">APPROVE</text>
+        <path d="M785 140 C820 176 810 213 785 246" fill="none" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah12)"/>
+        <text x="829" y="190" fill="#94a3b8" font-size="9" text-anchor="middle">REJECT</text>
+        <path d="M535 140 C530 187 530 222 535 260" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah12)"/>
+        <path d="M500 260 C493 225 495 187 505 141" fill="none" stroke="#a78bfa" stroke-width="1.3" stroke-dasharray="5,4" marker-end="url(#ah12)"/>
+
+        <g filter="url(#rough12)">
+          <rect x="25" y="70" width="140" height="70" rx="8" fill="rgba(30,41,59,0.65)" stroke="#94a3b8" stroke-width="1.5"/>
+          <rect x="225" y="65" width="160" height="80" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+          <rect x="445" y="60" width="180" height="90" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+          <rect x="685" y="65" width="190" height="80" rx="8" fill="rgba(136,19,55,0.25)" stroke="#fb7185" stroke-width="2"/>
+          <rect x="490" y="215" width="210" height="70" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+          <rect x="735" y="245" width="140" height="65" rx="8" fill="rgba(30,41,59,0.65)" stroke="#94a3b8" stroke-width="1.5"/>
+          <rect x="405" y="300" width="190" height="42" rx="7" fill="rgba(30,41,59,0.7)" stroke="#94a3b8" stroke-dasharray="4,3"/>
+        </g>
+        <text x="95" y="99" fill="white" font-size="12" font-weight="600" text-anchor="middle">Agent receives task</text>
+        <text x="305" y="96" fill="white" font-size="12" font-weight="600" text-anchor="middle">Sensitive action</text><text x="305" y="114" fill="white" font-size="12" font-weight="600" text-anchor="middle">prepared</text>
+        <text x="535" y="91" fill="white" font-size="11" font-weight="600" text-anchor="middle">Save pending checkpoint</text><text x="535" y="110" fill="#fbbf24" font-size="10" text-anchor="middle">in durable store</text>
+        <text x="780" y="96" fill="white" font-size="12" font-weight="600" text-anchor="middle">Pause: wait for</text><text x="780" y="115" fill="#fb7185" font-size="10" text-anchor="middle">human decision</text>
+        <text x="595" y="243" fill="white" font-size="11" font-weight="600" text-anchor="middle">Reload checkpoint</text><text x="595" y="261" fill="#34d399" font-size="10" text-anchor="middle">claim, then execute</text>
+        <text x="805" y="272" fill="white" font-size="10" font-weight="600" text-anchor="middle">Record rejection</text><text x="805" y="289" fill="#94a3b8" font-size="9" text-anchor="middle">and stop</text>
+        <text x="500" y="326" fill="#cbd5e1" font-size="10" text-anchor="middle">Process stops or restarts</text>
+      </svg>
+      <p class="diagram-caption">PREPARE THE ACTION → SAVE BEFORE NOTIFYING → PAUSE → RELOAD AFTER ANY RESTART → CLAIM EXECUTION OR RECORD REJECTION</p>
+    </div>
+
+    <p>The saved record must contain enough truth to resume without replaying old work: the task identifier, current step, proposed action, already-checked arguments, reason for review, and an approval status—pending, approved, rejected, or expired. It also needs an <span class="jargon">idempotency key</span> (a unique value used to recognize repeated attempts at the same sensitive action). The key alone does not guarantee one execution: the action runner must claim the record with an indivisible <code class="inline">approved</code> → <code class="inline">executing</code> change, save the result durably, and pass the key to the downstream service when that service supports duplicate protection.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>async def pause(task_id: str, action_id: str, checked_action: dict):
+    checkpoint = {
+        "task_id": task_id,
+        "step": "awaiting_approval",
+        "action": checked_action,
+        "status": "pending",
+        "idempotency_key": action_id,
+    }
+    await store.save(checkpoint)
+    await reviewer.notify(checkpoint)
+    return {"status": "waiting_for_approval"}</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>async function pause(
+  taskId: string,
+  actionId: string,
+  checkedAction: Action,
+): Promise&lt;WaitResult&gt; {
+  const checkpoint: Checkpoint = {
+    taskId, actionId, action: checkedAction,
+    step: "awaiting_approval", status: "pending",
+  };
+  await store.save(checkpoint);
+  await reviewer.notify(checkpoint);
+  return { status: "waiting_for_approval" };
+}</code></pre></div>
+
+    <p>On startup, both the Python and TypeScript services reload pending checkpoints. An <span class="jargon">approval endpoint</span> (a web route that receives a reviewer's decision) accepts a decision only for a known pending task, resumes at the saved step rather than beginning again, and durably records both the human decision and the final action result. A single guarded path must lead to the sensitive operation; a second “convenient” route around the checkpoint would undo the protection.</p>
+
+    <blockquote>The reader should prove the design with a restart test rather than code review alone: start two tasks, stop each process while it waits, restart, approve one, reject the other, and send the approval twice. The approved action must complete once, rejection must execute nothing, and duplicate approval must return the saved outcome rather than repeat the action.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> in the recorded lesson's simulated in-memory store, a second tool call replaced an existing <code class="inline">APPROVED</code> record with a new <code class="inline">PENDING</code> record. The TypeScript port found the same reset bug and also exhausted a one-step tool budget, producing an empty text response. Because the lesson did not use a durable store, it did not prove survival across a process restart.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s read-only first release has no sensitive actions to approve, but it applies durable state to pending human work: review items and handoff tickets live in the review inbox's durable store, so a restart never loses a turn that is waiting for a person. Durable approval of sensitive savings actions, with atomic claiming, durable result storage and duplicate protection so a repeated decision cannot repeat the action, is deferred to the write actions of a later release. Skill Reporter enforces the same approval-and-idempotency discipline for privileged report actions.</div>
+  </article>
+
+  <!-- LESSON 24 -->
+  <article class="lesson" id="lesson-24">
+    <span class="lesson-tag">Lesson 24</span>
+    <h3>Docker &amp; Compose Orchestration</h3>
+    <div class="problem"><b>The problem:</b> Eunomia code that works on one laptop can fail in shared environments because runtime versions, network wiring, and service dependencies differ. The stack needs one repeatable deployment path for build, startup, health, and shutdown. Skill Reporter needs the same parity to avoid environment-specific behavior drift.</div>
+
+    <p><span class="jargon">Orchestration</span> (coordinating several services as one system) makes that repeatable operation possible. <span class="jargon">Docker</span> (a system for packaging an application with the software it needs to run) turns each application into an <span class="jargon">image</span> (a packaged, unchanging template) that can be started as a <span class="jargon">container</span> (an isolated running instance of a packaged application). <span class="jargon">Docker Compose</span> (a configuration tool that starts and connects several containers together) describes the whole system: the Python agent, TypeScript web service, durable state store, a <span class="jargon">private network</span> (a connection available only to services in the stack), a <span class="jargon">persistent volume</span> (stored data that remains when a container is replaced), and readiness rules.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 420" role="img" aria-label="A Docker Compose stack connects web, agent, and durable-state containers, checks their readiness, and stores durable data in a persistent volume.">
+        <defs><marker id="ah24" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker><filter id="rough24"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="24" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.1"/></filter></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <rect x="175" y="35" width="690" height="335" rx="14" fill="rgba(30,41,59,0.18)" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="8,5" filter="url(#rough24)"/>
+        <text x="200" y="62" fill="#94a3b8" font-size="12" font-weight="600">DOCKER COMPOSE STACK</text>
+        <path d="M145 140 C180 132 192 131 225 135" fill="none" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#ah24)"/>
+        <path d="M225 155 C190 162 178 161 145 155" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah24)"/>
+        <path d="M415 130 C440 126 460 135 485 130" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#ah24)"/>
+        <path d="M320 180 C340 230 410 245 505 260" fill="none" stroke="#a78bfa" stroke-width="1.7" marker-end="url(#ah24)"/>
+        <path d="M570 180 C570 210 565 225 560 245" fill="none" stroke="#a78bfa" stroke-width="1.7" marker-end="url(#ah24)"/>
+        <path d="M535 245 C510 220 455 196 390 178" fill="none" stroke="#a78bfa" stroke-width="1" marker-end="url(#ah24)"/>
+        <path d="M625 245 C640 222 635 200 615 178" fill="none" stroke="#a78bfa" stroke-width="1" marker-end="url(#ah24)"/>
+        <path d="M700 118 C650 108 590 105 415 112" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#ah24)"/>
+        <path d="M700 142 C660 150 635 150 655 140" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#ah24)"/>
+        <path d="M570 315 L570 344" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#ah24)"/>
+        <g filter="url(#rough24)">
+          <rect x="20" y="105" width="125" height="70" rx="8" fill="rgba(30,41,59,0.65)" stroke="#94a3b8"/>
+          <rect x="225" y="85" width="190" height="95" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+          <rect x="485" y="85" width="170" height="95" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+          <rect x="700" y="95" width="130" height="70" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+          <rect x="475" y="245" width="190" height="70" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+          <path d="M500 350 C500 338 640 338 640 350 L640 382 C640 395 500 395 500 382 Z" fill="rgba(6,78,59,0.25)" stroke="#34d399" stroke-width="1.5"/>
+          <ellipse cx="570" cy="350" rx="70" ry="12" fill="#0f2f2b" stroke="#34d399"/>
+        </g>
+        <text x="82" y="133" fill="white" font-size="11" font-weight="600" text-anchor="middle">User or</text><text x="82" y="151" fill="#94a3b8" font-size="10" text-anchor="middle">reviewer</text>
+        <text x="320" y="116" fill="white" font-size="11" font-weight="600" text-anchor="middle">TypeScript web</text><text x="320" y="135" fill="#22d3ee" font-size="10" text-anchor="middle">service container</text>
+        <text x="570" y="116" fill="white" font-size="11" font-weight="600" text-anchor="middle">Python agent</text><text x="570" y="135" fill="#34d399" font-size="10" text-anchor="middle">service container</text>
+        <text x="765" y="123" fill="white" font-size="11" font-weight="600" text-anchor="middle">Health checks</text><text x="765" y="143" fill="#fbbf24" font-size="9" text-anchor="middle">ready, not just started</text>
+        <text x="570" y="274" fill="white" font-size="11" font-weight="600" text-anchor="middle">Durable state container</text><text x="570" y="293" fill="#a78bfa" font-size="9" text-anchor="middle">conversations + checkpoints</text>
+        <text x="570" y="375" fill="white" font-size="11" font-weight="600" text-anchor="middle">Persistent volume</text>
+      </svg>
+      <p class="diagram-caption">ONE COMPOSE STACK CONNECTS BOTH APPLICATIONS, CHECKS REAL READINESS, AND KEEPS ONLY DURABLE DATA ON A PERSISTENT VOLUME</p>
+    </div>
+
+    <p>Each language implementation gets its own deliberate build instructions. The final packaged images install only required dependencies, copy only required files, use a non-administrator account where practical, and never bake secrets into the reusable filesystem sections that make up an image. Compose declares settings explicitly rather than inheriting accidental values from a developer's shell, and gives connected services stable names on the stack's private network. Each image below provides the application-owned <code class="inline">/app/healthcheck</code> command used by Compose.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="yaml"><code>services:
+  web:
+    build: ./typescript-service
+    depends_on:
+      agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/healthcheck"]
+  agent:
+    build: ./python-agent
+    environment:
+      STATE_URL: http://state:8080
+    depends_on:
+      state:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/healthcheck"]
+  state:
+    build: ./state-service
+    healthcheck:
+      test: ["CMD", "/app/healthcheck"]
+    volumes: ["approval-data:/data"]
+volumes:
+  approval-data:</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>import asyncio
+import os
+from urllib.parse import urlparse
+
+from fastapi import FastAPI
+
+app = FastAPI()
+state_url = os.environ["STATE_URL"]
+
+@app.get("/health")
+async def health() -&gt; dict[str, str]:
+    target = urlparse(state_url)
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_connection(target.hostname, target.port), timeout=1
+    )
+    writer.close()
+    await writer.wait_closed()
+    return {"status": "ready"}</code></pre></div>
+
+    <p>A <span class="jargon">health check</span> (an automated test that reports whether a running service is ready to accept work) matters because “the container process exists” is not the same as “the application can serve requests.” Here the agent reports ready only after it can connect to required state storage, and Compose waits for each required dependency; an alternative design may report degraded readiness if it documents which work remains safe. Dependants must wait for readiness or retry connections safely. Clean shutdown must stop new work, finish or checkpoint <span class="jargon">in-flight work</span> (tasks that have started but not finished), and only then exit.</p>
+
+    <blockquote>Verification starts clean: build without cached assumptions, start everything through one Compose command, call both implementations over real network connections, restart an application container, and recreate the stack. Conversation and approval data must remain; machine-specific dependencies must not.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the recorded lesson first misdiagnosed a connection failure as a TLS certificate problem; the traffic was actually being intercepted by a different endpoint-security proxy. A later run also exposed a stale exact certificate pin. The lesson did not record a Compose <code class="inline">localhost</code> bug.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> packages its TypeScript service, web client and stores in containers, and the same orchestration starts the service, the stub upstream and the Python probes in the right order in CI, waiting for <code class="inline">/readyz</code> before the first probe runs. Python appears only in the probes, never on the serving path, and review data lives in durable storage, so replacing or restarting an application container loses no pending review. Skill Reporter uses the same packaging parity across environments.</div>
+  </article>
+
+  <!-- LESSON 39 -->
+  <article class="lesson" id="lesson-39">
+    <span class="lesson-tag">Lesson 39</span>
+    <h3>Human-in-the-Loop Approval Checkpoints</h3>
+    <div class="problem"><b>The problem:</b> after Eunomia asks for approval, that request must wait without blocking other customer sessions. Approve, reject, and timeout paths all need explicit handling; silence or delayed responses must never be treated as consent. Skill Reporter requires the same explicit checkpoint outcomes for report workflows.</div>
+
+    <p>A <span class="jargon">Future/Promise</span> (a live-process placeholder for a result that will be supplied later; Python commonly calls it a Future, while TypeScript uses a Promise) lets one task wait while the service continues handling other requests. It is not durable and disappears if the process restarts. At an <span class="jargon">approval checkpoint</span> (a point where execution cannot continue until a person decides), the durable record from Lesson 12 remains authoritative; a running service may associate a Future or Promise with that record only as a temporary waiter. After a restart, the service must create a new waiter or resume directly from the durable record rather than pretending the old placeholder survived.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 420" role="img" aria-label="A sensitive action waits for one human decision, then follows an approve, reject, or timeout path before cleanup.">
+        <defs><marker id="ah39" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker><filter id="rough39"><feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="2" seed="39" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.2"/></filter></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <path d="M210 210 C230 207 250 213 270 210" fill="none" stroke="#fbbf24" stroke-width="2" marker-end="url(#ah39)"/>
+        <path d="M470 210 C490 207 510 213 530 210" fill="none" stroke="#fb7185" stroke-width="2" marker-end="url(#ah39)"/>
+        <path d="M625 110 C690 118 725 145 745 170" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#ah39)"/>
+        <text x="706" y="130" fill="#34d399" font-size="9">APPROVE</text>
+        <path d="M585 110 C535 125 500 130 430 165" fill="none" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah39)"/>
+        <text x="505" y="125" fill="#94a3b8" font-size="9">REJECT</text>
+        <path d="M620 250 C620 275 620 292 620 315" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah39)"/>
+        <text x="630" y="286" fill="#fb7185" font-size="9">TIMEOUT</text>
+        <path d="M785 250 C805 290 770 340 700 375" fill="none" stroke="#34d399" marker-end="url(#ah39)"/>
+        <path d="M385 250 C395 315 465 355 535 375" fill="none" stroke="#94a3b8" marker-end="url(#ah39)"/>
+        <path d="M620 365 L620 375" fill="none" stroke="#fb7185" marker-end="url(#ah39)"/>
+        <g filter="url(#rough39)">
+          <rect x="25" y="170" width="185" height="80" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+          <rect x="270" y="165" width="200" height="90" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+          <rect x="530" y="165" width="180" height="90" rx="8" fill="rgba(136,19,55,0.25)" stroke="#fb7185" stroke-width="2"/>
+          <rect x="540" y="50" width="180" height="60" rx="8" fill="rgba(30,41,59,0.65)" stroke="#94a3b8"/>
+          <rect x="710" y="170" width="170" height="80" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+          <rect x="295" y="170" width="155" height="80" rx="8" fill="none" stroke="none"/>
+          <rect x="300" y="275" width="185" height="70" rx="8" fill="rgba(30,41,59,0.65)" stroke="#94a3b8"/>
+          <rect x="530" y="315" width="180" height="50" rx="8" fill="rgba(136,19,55,0.35)" stroke="#fb7185"/>
+          <rect x="500" y="375" width="240" height="35" rx="7" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+        </g>
+        <text x="117" y="201" fill="white" font-size="11" font-weight="600" text-anchor="middle">Agent proposes</text><text x="117" y="220" fill="#22d3ee" font-size="10" text-anchor="middle">sensitive action</text>
+        <text x="370" y="196" fill="white" font-size="11" font-weight="600" text-anchor="middle">Create approval ID</text><text x="370" y="215" fill="#fbbf24" font-size="10" text-anchor="middle">and Future/Promise</text>
+        <text x="620" y="201" fill="white" font-size="11" font-weight="600" text-anchor="middle">Execution waits here</text><text x="620" y="221" fill="#fb7185" font-size="9" text-anchor="middle">only this task pauses</text>
+        <text x="630" y="85" fill="white" font-size="11" font-weight="600" text-anchor="middle">Human reviewer</text>
+        <text x="795" y="197" fill="white" font-size="10" font-weight="600" text-anchor="middle">Resolve approved</text><text x="795" y="215" fill="#34d399" font-size="9" text-anchor="middle">validate → execute once</text>
+        <text x="392" y="303" fill="white" font-size="10" font-weight="600" text-anchor="middle">Resolve rejected</text><text x="392" y="321" fill="#94a3b8" font-size="9" text-anchor="middle">cancel action</text>
+        <text x="620" y="337" fill="white" font-size="10" text-anchor="middle">Expire request</text><text x="620" y="352" fill="#fb7185" font-size="9" text-anchor="middle">do not execute</text>
+        <text x="620" y="398" fill="#cbd5e1" font-size="10" text-anchor="middle">Record final decision and clean up</text>
+      </svg>
+      <p class="diagram-caption">ONE PENDING DECISION RESOLVES EXACTLY ONCE: APPROVE AND REVALIDATE, REJECT AND CANCEL, OR EXPIRE WITHOUT EXECUTING</p>
+    </div>
+
+    <p>The approval path first verifies that the identifier exists and is still pending. It resolves the placeholder with an explicit approved value, rechecks the action arguments, executes once, and records the outcome. The rejection path resolves that same placeholder with an explicit rejected value, returns a cancellation result, records a normal human decision rather than a system error, and calls no sensitive tool.</p>
+
+    <p>These are registry fragments, not the complete endpoint. They validate the incoming decision and show one guarded settlement path; production code must also route timeout through that path, revalidate arguments after approval, claim execution durably, run the action, and record its outcome.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>async def decide(approval_id: str, value: object) -&gt; str:
+    if value not in ("approved", "rejected"):
+        raise ValueError("decision must be approved or rejected")
+    decision = str(value)
+    async with pending_lock:
+        request = pending.get(approval_id)
+        if request is None or request.status != "pending":
+            return "late, unknown, or already decided"
+        request.status = decision
+        pending.pop(approval_id)
+    request.future.set_result(decision)
+    return decision</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type Decision = "approved" | "rejected";
+
+function parseDecision(value: unknown): Decision {
+  if (value !== "approved" &amp;&amp; value !== "rejected") {
+    throw new Error("decision must be approved or rejected");
+  }
+  return value;
+}
+
+async function decide(
+  approvalId: string,
+  value: unknown,
+): Promise&lt;Decision&gt; {
+  const decision = parseDecision(value);
+  const request = pending.get(approvalId);
+  if (!request || request.status !== "pending") {
+    throw new Error("late, unknown, or already decided");
+  }
+  request.status = decision;
+  pending.delete(approvalId);
+  request.resolve(decision);
+  return decision;
+}</code></pre></div>
+
+    <p>A <span class="jargon">timeout</span> (a limit on how long the system will wait) expires without approval. Duplicate and late decisions are rejected clearly, completed entries are removed, and cleanup happens after every outcome. The difficult edge is a <span class="jargon">race condition</span> (a bug where the result depends on which of two events happens first): approval and timeout may arrive at nearly the same instant. Both languages therefore need one <span class="jargon">atomic transition</span> (an indivisible state change that competing events cannot both win) from pending to one—and only one—final state.</p>
+
+    <p>Python resolves a Future with an explicit decision value; TypeScript retains the function that settles a Promise and calls it from the approval endpoint. Their cancellation details differ, but readers should test the same outcomes for approval, rejection, timeout, and repeated response.</p>
+
+    <div class="finding"><b>A real finding worth knowing:</b> the recorded Python and TypeScript runs demonstrated the approve and reject paths. They did not observe a timeout race. Treating reviewer responses and timeout as competing attempts at one guarded settlement is defensive guidance that still needs a dedicated concurrency test.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b>'s read-only first release has no per-action approval checkpoints; it keeps only the broad oversight principle (a required reviewer on production deploys and a person at the bottom of the answer sequence). When write actions arrive, Eunomia will use a durable approval record for every sensitive savings action and may attach a Future or Promise while a process is live; each affected task will follow an explicit approve, reject, or timeout path, and after restart, work resumes from the durable record rather than the vanished placeholder. Skill Reporter applies the same durable-record recovery for pending human decisions.</div>
+  </article>
+
+  <!-- LESSON 47 -->
+  <article class="lesson" id="lesson-47">
+    <span class="lesson-tag">Lesson 47</span>
+    <h3>Self-Healing Dynamic Tool Correction</h3>
+    <div class="problem"><b>The problem:</b> Eunomia may choose the correct tool but send one malformed argument, like a bad date or account reference. Hard failure wastes recoverable work, while silent rewriting can trigger the wrong action. Skill Reporter has the same correction-vs-safety trade-off for malformed report tool inputs.</div>
+
+    <p>A <span class="jargon">tool call</span> (a structured request from the model to run a named function) must pass <span class="jargon">schema validation</span> (checking that supplied values match required names, types, and formats) before execution. Format mistakes must be separated from permission denials, network failures, and internal failures because only the first category is a sensible target for automatic correction.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 380" role="img" aria-label="A tool call is validated, sent through permission checks when valid, or corrected within a fixed retry limit when its format is repairable.">
+        <defs><marker id="ah47" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker><filter id="rough47"><feTurbulence type="fractalNoise" baseFrequency="0.021" numOctaves="2" seed="47" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.2"/></filter></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <path d="M190 170 C215 165 230 175 255 170" fill="none" stroke="#a78bfa" stroke-width="2" marker-end="url(#ah47)"/>
+        <path d="M410 170 C450 135 485 120 535 115" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#ah47)"/>
+        <text x="460" y="130" fill="#34d399" font-size="9">YES</text>
+        <path d="M410 190 C450 225 485 240 535 245" fill="none" stroke="#fb7185" stroke-width="2" marker-end="url(#ah47)"/>
+        <text x="460" y="229" fill="#fb7185" font-size="9">NO</text>
+        <path d="M695 115 L735 115" fill="none" stroke="#fbbf24" stroke-width="2" marker-end="url(#ah47)"/>
+        <path d="M695 245 C725 245 745 265 760 290" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah47)"/>
+        <path d="M615 280 C610 315 545 325 470 320" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#ah47)"/>
+        <path d="M470 320 C360 315 325 270 325 220" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah47)"/>
+        <text x="430" y="345" fill="#22d3ee" font-size="9" text-anchor="middle">RETRY WITHIN FIXED LIMIT</text>
+        <g filter="url(#rough47)">
+          <rect x="20" y="135" width="170" height="70" rx="8" fill="rgba(30,41,59,0.65)" stroke="#94a3b8"/>
+          <path d="M330 115 L410 175 L330 235 L250 175 Z" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+          <rect x="535" y="75" width="160" height="80" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24"/>
+          <rect x="735" y="80" width="145" height="70" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+          <rect x="535" y="210" width="160" height="70" rx="8" fill="rgba(136,19,55,0.25)" stroke="#fb7185" stroke-width="2"/>
+          <rect x="310" y="285" width="160" height="65" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/>
+          <rect x="735" y="290" width="145" height="60" rx="8" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+        </g>
+        <text x="105" y="164" fill="white" font-size="11" font-weight="600" text-anchor="middle">Model emits</text><text x="105" y="183" fill="#94a3b8" font-size="10" text-anchor="middle">tool call</text>
+        <text x="330" y="169" fill="white" font-size="11" font-weight="600" text-anchor="middle">Arguments</text><text x="330" y="187" fill="#a78bfa" font-size="10" text-anchor="middle">valid?</text>
+        <text x="615" y="104" fill="white" font-size="10" font-weight="600" text-anchor="middle">Check permission or</text><text x="615" y="123" fill="#fbbf24" font-size="9" text-anchor="middle">human approval</text>
+        <text x="807" y="108" fill="white" font-size="10" font-weight="600" text-anchor="middle">Execute typed tool</text><text x="807" y="127" fill="#34d399" font-size="9" text-anchor="middle">only now</text>
+        <text x="615" y="239" fill="white" font-size="10" font-weight="600" text-anchor="middle">Return field-specific</text><text x="615" y="258" fill="#fb7185" font-size="9" text-anchor="middle">validation error</text>
+        <text x="390" y="312" fill="white" font-size="10" font-weight="600" text-anchor="middle">Model corrects its</text><text x="390" y="330" fill="#22d3ee" font-size="9" text-anchor="middle">own arguments</text>
+        <text x="807" y="315" fill="white" font-size="9" text-anchor="middle">STOP: not repairable</text><text x="807" y="332" fill="#94a3b8" font-size="9" text-anchor="middle">or limit reached</text>
+      </svg>
+      <p class="diagram-caption">VALIDATE FIRST → EXECUTE ONLY A VALID AND PERMITTED CALL; OTHERWISE RETURN A PRECISE ERROR, CORRECT WITHIN A LIMIT, AND VALIDATE AGAIN</p>
+    </div>
+
+    <p>When validation fails, the tool returns a <span class="jargon">structured error</span> (a failure response with specific fields that software can interpret). It names the invalid field and states the expected format. A safe value such as the displayed date may be returned so the model can see what needs changing; sensitive account, personal, or secret fields must instead be redacted or described only by their non-secret shape. “Tool failed” is not enough information to repair anything.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>from datetime import date
+
+
+def validate_maturity_date(value: str) -&gt; dict[str, object] | None:
+    try:
+        date.fromisoformat(value)
+        return None
+    except ValueError:
+        return {
+            "kind": "validation_error",
+            "field": "maturity_date",
+            "expected": "a real calendar date in YYYY-MM-DD form",
+            "received": value,
+            "retryable": True,
+        }</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>type ValidationError = {
+  kind: "validation_error";
+  field: string;
+  expected: string;
+  received: string;
+  retryable: true;
+};
+
+function validateMaturityDate(value: string): ValidationError | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const leap = year % 4 === 0 &amp;&amp; (year % 100 !== 0 || year % 400 === 0);
+    const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (year &gt; 0 &amp;&amp; month &gt; 0 &amp;&amp; month &lt;= 12 &amp;&amp; day &gt; 0 &amp;&amp; day &lt;= days[month - 1]) {
+      return null;
+    }
+  }
+  return { kind: "validation_error", field: "maturity_date",
+    expected: "a real calendar date in YYYY-MM-DD form",
+    received: value, retryable: true };
+}</code></pre></div>
+
+    <p>The error is added to the conversation with an instruction to issue a corrected tool call, not a prose apology. The replacement arguments begin validation again from the start. A <span class="jargon">bounded retry</span> (trying again only up to a fixed limit) permits a small number of attempts for correctable format errors, then stops. Denied actions, missing authorization, and permanent service failures are not retried, and valid formatting never counts as permission: corrected sensitive calls still pass the same human checkpoint.</p>
+
+    <blockquote>Test all branches: one malformed but repairable call should become valid on the next attempt; an already valid call should never enter the loop; a permanent failure should stop immediately. Python and TypeScript wording may differ, but their final classification and action must agree.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> after the malformed account identifier was corrected, the Python run repeatedly reported a false zero balance while the TypeScript port reported the correct balance. That divergence shows why a repaired argument and the tool's resulting data must be verified separately; successful correction does not prove a correct answer.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> can repair the one capability request the model may make on the composed step without collapsing the conversation: the validation error goes back once, the corrected request must pass the same Zod schema and token-derived scope before it runs, and a second failure steps the answer down a step. Write actions, deferred to a later release, would also need the human-approval checkpoint before anything executes. Skill Reporter mirrors this safe-correction path for malformed report-tool calls.</div>
+  </article>
+
+  <!-- LESSON 53 -->
+  <article class="lesson" id="lesson-53">
+    <span class="lesson-tag">Lesson 53</span>
+    <h3>Resilient Streaming Agent Responses</h3>
+    <div class="problem"><b>The problem:</b> Eunomia should stream responses as they are produced, but mid-stream tool calls may block for approvals, retries, or failures. The connection must stay valid, typed, and truthful about state changes instead of fabricating completion. Skill Reporter has the same requirement when long report steps stream progress and checkpoint events.</div>
+
+    <p>A <span class="jargon">streaming response</span> (sending a reply in small pieces as it is produced) uses a <span class="jargon">ReadableStream</span> (a web interface that lets a server provide those pieces over time). Its <span class="jargon">stream controller</span> (the object used to add events and close the stream) manages delivery. Ordinary text can appear immediately, but internal tool work is a different <span class="jargon">event type</span> (a label that tells the receiver what kind of stream item arrived): raw, unchecked arguments must never be presented as completed work.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 900 430" role="img" aria-label="A browser receives ordered text and safe tool events; tool calls pass validation and human approval before verified results return to the stream.">
+        <defs><marker id="ah53" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker><filter id="rough53"><feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="2" seed="53" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.1"/></filter></defs>
+        <rect width="100%" height="100%" fill="#0a0f1f"/>
+        <path d="M170 120 C200 112 220 128 250 120" fill="none" stroke="#22d3ee" stroke-width="5" marker-end="url(#ah53)"/>
+        <path d="M250 140 C220 148 200 132 170 140" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#ah53)"/>
+        <text x="210" y="96" fill="#22d3ee" font-size="9" text-anchor="middle">REAL WEB CONNECTION</text>
+        <path d="M445 115 C475 108 495 122 525 115" fill="none" stroke="#a78bfa" stroke-width="2" marker-end="url(#ah53)"/>
+        <text x="485" y="100" fill="#a78bfa" font-size="9">TEXT CHUNKS</text>
+        <path d="M610 155 C610 185 610 200 610 225" fill="none" stroke="#fbbf24" stroke-width="2" marker-end="url(#ah53)"/>
+        <text x="620" y="195" fill="#fbbf24" font-size="9">TOOL-CALL EVENT</text>
+        <path d="M690 260 L730 260" fill="none" stroke="#fb7185" stroke-width="2" marker-end="url(#ah53)"/>
+        <path d="M805 295 C805 320 775 330 730 330" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#ah53)"/>
+        <path d="M610 295 C610 338 570 350 520 350" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah53)"/>
+        <path d="M520 350 C470 345 430 280 375 175" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah53)"/>
+        <text x="500" y="370" fill="#34d399" font-size="9">VERIFIED RESULT</text>
+        <path d="M90 165 C90 235 125 270 185 290" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#ah53)"/>
+        <path d="M260 320 C305 320 330 302 360 280" fill="none" stroke="#94a3b8" marker-end="url(#ah53)"/>
+        <path d="M260 335 C310 355 350 375 400 385" fill="none" stroke="#94a3b8" marker-end="url(#ah53)"/>
+        <path d="M375 165 C370 220 380 260 400 300" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ah53)"/>
+        <g filter="url(#rough53)">
+          <rect x="20" y="85" width="150" height="80" rx="8" fill="rgba(30,41,59,0.65)" stroke="#94a3b8"/>
+          <rect x="250" y="75" width="195" height="100" rx="8" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/>
+          <rect x="525" y="75" width="170" height="80" rx="8" fill="rgba(76,29,149,0.4)" stroke="#a78bfa"/>
+          <rect x="530" y="225" width="160" height="70" rx="8" fill="rgba(120,53,15,0.3)" stroke="#fbbf24"/>
+          <rect x="730" y="225" width="150" height="70" rx="8" fill="rgba(136,19,55,0.25)" stroke="#fb7185"/>
+          <rect x="530" y="330" width="160" height="60" rx="8" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+          <rect x="155" y="285" width="145" height="70" rx="8" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+          <rect x="360" y="245" width="135" height="55" rx="8" fill="rgba(136,19,55,0.25)" stroke="#fb7185"/>
+          <rect x="360" y="365" width="150" height="45" rx="8" fill="rgba(120,53,15,0.25)" stroke="#fbbf24"/>
+          <rect x="285" y="185" width="125" height="45" rx="8" fill="rgba(30,41,59,0.7)" stroke="#94a3b8"/>
+        </g>
+        <text x="95" y="116" fill="white" font-size="11" font-weight="600" text-anchor="middle">Browser client</text><text x="95" y="137" fill="#94a3b8" font-size="9" text-anchor="middle">text + safe events</text>
+        <text x="347" y="111" fill="white" font-size="11" font-weight="600" text-anchor="middle">ReadableStream</text><text x="347" y="131" fill="#22d3ee" font-size="10" text-anchor="middle">controller</text>
+        <text x="610" y="108" fill="white" font-size="11" font-weight="600" text-anchor="middle">Agent model</text>
+        <text x="610" y="253" fill="white" font-size="10" font-weight="600" text-anchor="middle">Typed validation</text><text x="610" y="272" fill="#fbbf24" font-size="9" text-anchor="middle">before execution</text>
+        <text x="805" y="251" fill="white" font-size="9" font-weight="600" text-anchor="middle">Human approval</text><text x="805" y="269" fill="#fb7185" font-size="9" text-anchor="middle">if sensitive</text>
+        <text x="610" y="358" fill="white" font-size="10" font-weight="600" text-anchor="middle">Tool execution</text><text x="610" y="376" fill="#34d399" font-size="9" text-anchor="middle">verified result</text>
+        <text x="227" y="312" fill="white" font-size="9" text-anchor="middle">Tool or model</text><text x="227" y="329" fill="#94a3b8" font-size="9" text-anchor="middle">failure</text>
+        <text x="427" y="269" fill="white" font-size="9" text-anchor="middle">Emit safe error</text><text x="435" y="391" fill="#fbbf24" font-size="9" text-anchor="middle">Preserve event order</text>
+        <text x="347" y="212" fill="#cbd5e1" font-size="9" text-anchor="middle">Close stream once</text>
+      </svg>
+      <p class="diagram-caption">STREAM TEXT EARLY → ROUTE TOOL EVENTS THROUGH VALIDATION AND APPROVAL → RETURN ONLY VERIFIED RESULTS → EMIT SAFE FAILURES → CLOSE ONCE</p>
+    </div>
+
+    <p>The event sequence is explicit: open the connection, send ordered text chunks, emit a safe status event while a tool or approval is pending, emit the verified result or a clear failure, and close exactly once. Every tool passes a <span class="jargon">typed tool boundary</span> (a checked interface that permits only the tool fields and value types declared by the application). Correctable format errors enter the bounded correction loop; sensitive valid calls enter approval. Streaming never weakens either check.</p>
+
+    <p>The following examples are event-shaping sketches. The Python generator is conceptual pseudocode; the recorded Lesson 53 implementation is TypeScript-only because this curriculum has no Python equivalent for the Vercel AI SDK primitive. Both sketches show ordered events, checked tools, a safe error, and one normal close, but they do not implement disconnect handling or backpressure.</p>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="python"><code>async def stream_events(agent):
+    try:
+        async for event in agent.run():
+            if event.kind == "tool_call":
+                yield encode({"type": "tool-pending"})
+                result = await run_checked_tool(event)
+                yield encode({"type": "tool-result", "data": result})
+            else:
+                yield encode({"type": "text-delta", "data": event.text})
+    except Exception:
+        yield encode({"type": "safe-error"})
+    finally:
+        yield encode({"type": "stream-finish"})</code></pre></div>
+
+    <div class="code-wrap"><pre class="code-block" data-lang="typescript"><code>const stream = new ReadableStream&lt;Uint8Array&gt;({
+  async start(controller) {
+    try {
+      for await (const event of agent.run()) {
+        if (event.kind === "tool_call") {
+          controller.enqueue(encode({ type: "tool-pending" }));
+          const result = await runCheckedTool(event);
+          controller.enqueue(encode({ type: "tool-result", data: result }));
+        } else {
+          controller.enqueue(encode({ type: "text-delta", data: event.text }));
+        }
+      }
+    } catch {
+      controller.enqueue(encode({ type: "safe-error" }));
+    } finally {
+      controller.close();
+    }
+  },
+});</code></pre></div>
+
+    <p>A production implementation still needs <span class="jargon">backpressure</span> (slowing production when the receiver cannot consume data quickly enough), disconnect detection, and cancellation of unnecessary <span class="jargon">model generation</span> (the model's ongoing production of response text). It must release stream resources and separately decide whether already-started durable work should continue, because closing a browser tab should not erase a recorded approval decision. Those behaviours require cancellation signals and pressure-aware stream hooks that are not present in the sketches above.</p>
+
+    <blockquote>Readers should verify the TypeScript implementation over a real web connection: the first text should arrive before completion; tool arguments should be checked before execution; an approval delay should not corrupt event order; and failures, slow receivers, and disconnects should clean up. The conceptual Python sketch is not evidence of cross-language streaming equivalence.</blockquote>
+
+    <div class="finding"><b>A real finding worth knowing:</b> a terse numeric query legitimately produced a tool call with zero narrated text chunks. The revised TypeScript test separated narration from tool-output correctness; a later run measured 57 text chunks while checking the tool result independently. The recorded lesson did not find that the stream closed at the first tool pause.</div>
+
+    <div class="capstone-tie"><b>In the capstone:</b> <b>Eunomia</b> uses this event shape for its typed turn events: only verified text is streamed, and every turn ends with exactly one <code class="inline">answer.final</code>, <code class="inline">turn.declined</code>, <code class="inline">handoff.offered</code> or <code class="inline">turn.failed</code>. Pausing a stream for human approval of a sensitive action is deferred with write actions. Production readiness additionally requires tested backpressure, cancellation, disconnect cleanup, and a policy for durable work. Skill Reporter follows the same typed-streaming contract for live report responses.</div>
+  </article>
+
+  <article class="lesson closing-chapter" id="closing">
+    <h3>What 64 Real, Verified Lessons Taught Us</h3>
+
+    <h4>Real execution beats polished theory</h4>
+    <p>The strongest lesson across all 64 lessons is simple: run the code and report what actually happened. A polished explanation cannot replace a real Python execution, a real TypeScript execution, and an honest account of the output. Expected output must never be quietly promoted into claimed output.</p>
+
+    <p>The useful findings were not limited to successful demonstrations. Outdated interfaces, environmental failures, timing problems, unsupported features, and different behaviour between the two languages were evidence too. Preserve the real error message and explain its cause. Report the bug that was found and fixed instead of rewriting the history as a flawless first attempt. Say plainly when the libraries, controls, or failure behaviour differ. A verified limitation is more valuable than an invented success.</p>
+
+    <h4>Verify the explanation separately from the data</h4>
+    <p>A model can return the correct records while attaching an incorrect self-reported field. A <span class="jargon">tenant identifier</span> (a value that says which customer or account owns data) or a <span class="jargon">confidence score</span> (the model's own estimate of how likely it is to be correct) may conflict with the retrieved result. One response can therefore contain two claims that need separate checks: whether the records, calculation, or tool output are correct, and whether the model's labels, explanation, ownership field, confidence, or summary are accurate.</p>
+
+    <p>A successful lookup does not prove that every generated field around it is trustworthy. Security, ownership, and policy decisions must come from independently checked application data, never from a model describing itself as authorized or confident.</p>
+
+    <h4>Match verification strictness to the lesson</h4>
+    <p>A <span class="jargon">deterministic algorithm</span> (a fixed calculation that gives the same output for the same input) should match exactly across language ports. If Python produces <code class="inline">0.375</code>, TypeScript should produce <code class="inline">0.375</code>, digit for digit, unless a documented numerical rule explains the difference.</p>
+
+    <p>An <span class="jargon">LLM-based lesson</span> (a lesson whose wording or choice depends on a language model) normally matches in direction rather than exact phrasing. Both implementations should reach the same practical conclusion, call the appropriate kind of tool, respect the same safety boundary, and produce compatible structured data, while their sentences and token order may differ.</p>
+
+    <blockquote><b>The verification rule:</b> with no model involved, demand exact values, ordering, counts, and state transitions. With a model involved, demand the same intent, safety behavior, evidence, and structured outcome. In a mixed system, check deterministic components exactly and model-generated components semantically. Never excuse an exact algorithmic mismatch as “model variability” when no model produced that value.</blockquote>
+
+    <p>Knowing which category a lesson belongs to prevents weak testing on one side and unfair testing on the other.</p>
+
+    <h4>The “should not trigger” case is part of the feature</h4>
+    <p>Every safety or detection mechanism needs a positive test and a negative test. Proving that a dangerous request triggers a guard is only half the job; the system must also prove that a healthy request does not trigger it. An approval checkpoint should pause a sensitive action but not an ordinary read-only request. A correction loop should retry malformed arguments but not a valid call. A detector should flag its intended risky condition and leave a healthy case alone.</p>
+
+    <p>The same symmetry applies to recovery. A retry policy should recover from a temporary failure but stop on a permanent one. A streaming error handler should emit a failure event when needed but not corrupt a successful stream. A durable resume path should restore unfinished work but never replay completed work. False positives can make a safety feature unusable; false negatives make it ineffective. Both sides must be executed and verified.</p>
+
+    <h4>Final reflection</h4>
+    <p>Shipping a dependable agent is not mainly about producing an impressive answer. It is about making every boundary visible and testable: where data came from, where a model made a claim, where deterministic logic must match exactly, where a person must decide, where state must survive, and where failure must stop rather than disappear.</p>
+
+    <p>Across 64 lessons, the reliable pattern stayed consistent: build the smallest real version, run it in both languages, test success and non-triggering cases, preserve the actual evidence, and describe differences without smoothing them away. That discipline is what turns <b>Eunomia</b> from a conversational demonstration into a savings assistant that can be deployed, supervised, interrupted, resumed, corrected, and trusted within clearly defined limits.</p>
+  </article>
+
+</section>
